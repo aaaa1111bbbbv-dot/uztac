@@ -58,7 +58,7 @@
 <div class="radio-body">
   <div class="top-bar">
     <div class="brand"><div class="led" id="statusLed"></div>UZ-TAC PRO</div>
-    <div style="font-size: 11px; color: var(--green);" id="keepAliveBadge">⚡ UYG'OQ REJIM</div>
+    <div style="font-size: 11px; color: var(--green);">⚡ STUN+TURN FAOL</div>
   </div>
   <div class="screen">
     <div class="screen-header">
@@ -91,14 +91,37 @@
       <span class="ptt-sub">PTT REJIMI</span>
     </button>
   </div>
-  <div class="peers-info">Ekran o'chiq holatda ham 24/7 aloqa • UZTAC_V2.1</div>
+  <div class="peers-info">Barqaror aloqa • UZTAC_V2.2</div>
 </div>
 <div id="remoteAudios" style="display:none;"></div>
 
 <script src="cordova.js"></script>
 <script>
-  const SECRET_PREFIX = "UZTAC_PRIVATE_V2_";
+  const SECRET_PREFIX = "UZTAC_V22_";
   const MAX_SLOTS = 8;
+
+  // Mobil internet (4G/NAT) orqali uzilmasdan ulanish uchun ICE/TURN serverlari
+  const PEER_CONFIG = {
+    debug: 0,
+    config: {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+        { urls: "stun:global.stun.twilio.com:3478" },
+        {
+          urls: "turn:openrelay.metered.ca:80",
+          username: "openrelayproject",
+          credential: "openrelayproject"
+        },
+        {
+          urls: "turn:openrelay.metered.ca:443",
+          username: "openrelayproject",
+          credential: "openrelayproject"
+        }
+      ]
+    }
+  };
+
   let peer = null, localStream = null, processedStream = null, audioCtx = null, micGainNode = null, analyser = null;
   let activeCalls = {}, dataConns = {}, isConnected = false, isTransmitting = false, isLocked = false, isBoosted = false, isTesting = false;
   let roomHash = "", mySlotIndex = 1, currentChannel = "", heartbeatTimer = null, silentOsc = null;
@@ -127,39 +150,23 @@
 
   togglePassBtn.addEventListener('click', () => { passInput.type = passInput.type === 'password' ? 'text' : 'password'; });
 
-  // Android tizimi ilovani uyquga ketkazmasligi uchun eshitilmaydigan signal
   function startSilentKeepAlive() {
     try {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (audioCtx.state === 'suspended') audioCtx.resume();
       if (silentOsc) return;
-
       silentOsc = audioCtx.createOscillator();
       const silentGain = audioCtx.createGain();
       silentOsc.frequency.value = 18000;
-      silentGain.gain.value = 0.0001; // Quloqqa umuman eshitilmaydi, lekin Android audio kanalini ochiq ushlaydi
+      silentGain.gain.value = 0.0001;
       silentOsc.connect(silentGain);
       silentGain.connect(audioCtx.destination);
       silentOsc.start();
-
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: 'UZ-TAC Ratsiya Faol',
-          artist: 'Kanal: ' + currentChannel.toUpperCase()
-        });
-        navigator.mediaSession.playbackState = 'playing';
-      }
     } catch (e) {}
   }
 
   function stopSilentKeepAlive() {
-    try {
-      if (silentOsc) {
-        silentOsc.stop();
-        silentOsc.disconnect();
-        silentOsc = null;
-      }
-    } catch (e) {}
+    try { if (silentOsc) { silentOsc.stop(); silentOsc.disconnect(); silentOsc = null; } } catch (e) {}
   }
 
   function generateRoomHash(channel, password) {
@@ -218,7 +225,13 @@
     draw();
   }
 
-  function updatePeerCount() { peerCount.textContent = `${Object.keys(activeCalls).length} QURILMA`; }
+  function updatePeerCount() {
+    const count = Object.keys(activeCalls).length;
+    peerCount.textContent = `${count} QURILMA`;
+    if (isConnected) {
+      statusText.textContent = count > 0 ? `Aloqa barqaror (${count} qurilma)` : "Boshqa qurilma kutilmoqda...";
+    }
+  }
 
   function attachRemoteAudio(peerId, stream) {
     let audio = document.getElementById('audio_' + peerId);
@@ -235,8 +248,14 @@
   }
 
   function removePeer(peerId) {
-    if (activeCalls[peerId]) { activeCalls[peerId].close(); delete activeCalls[peerId]; }
-    if (dataConns[peerId]) { dataConns[peerId].close(); delete dataConns[peerId]; }
+    if (activeCalls[peerId]) {
+      try { activeCalls[peerId].close(); } catch (e) {}
+      delete activeCalls[peerId];
+    }
+    if (dataConns[peerId]) {
+      try { dataConns[peerId].close(); } catch (e) {}
+      delete dataConns[peerId];
+    }
     const audio = document.getElementById('audio_' + peerId);
     if (audio) audio.remove();
     updatePeerCount();
@@ -254,6 +273,20 @@
     trySlot(1, ch);
   }
 
+  function connectToLowerSlots() {
+    if (!isConnected || !peer || peer.destroyed) return;
+    // To'qnashuv bo'lmasligi uchun faqat katta raqamli slot kichik slolarga qo'ng'iroq qiladi
+    for (let i = 1; i < mySlotIndex; i++) {
+      const targetId = `${SECRET_PREFIX}${roomHash}_S${i}`;
+      if (!activeCalls[targetId]) {
+        const call = peer.call(targetId, processedStream);
+        if (call) handleCall(call);
+        const dc = peer.connect(targetId);
+        if (dc) handleDataConn(dc);
+      }
+    }
+  }
+
   function startHeartbeatLoop() {
     clearInterval(heartbeatTimer);
     heartbeatTimer = setInterval(() => {
@@ -262,41 +295,40 @@
       if (peer && peer.disconnected && !peer.destroyed) {
         peer.reconnect();
       }
-      // Barcha ulangan qurilmalarga "ping" yuborib aloqani tirik ushlash
       Object.values(dataConns).forEach(dc => {
-        if (dc && dc.open) dc.send('PING');
-      });
-      // Ulanmay qolgan slotlarni qayta tekshirish
-      for (let i = 1; i <= MAX_SLOTS; i++) {
-        if (i === mySlotIndex) continue;
-        const targetId = `${SECRET_PREFIX}${roomHash}_S${i}`;
-        if (!activeCalls[targetId] && peer && !peer.destroyed) {
-          const call = peer.call(targetId, processedStream);
-          if (call) handleCall(call);
-          const dc = peer.connect(targetId);
-          if (dc) handleDataConn(dc);
+        if (dc && dc.open) {
+          try { dc.send('PING'); } catch (e) {}
         }
-      }
-    }, 15000);
+      });
+      connectToLowerSlots();
+    }, 6000);
   }
 
   function trySlot(slotIndex, displayCh) {
     if (slotIndex > MAX_SLOTS) { statusText.textContent = "Kanal to'la (Maksimal 8 qurilma)"; connectBtn.disabled = false; return; }
-    const tempPeer = new Peer(`${SECRET_PREFIX}${roomHash}_S${slotIndex}`, { debug: 0 });
+    const tempPeer = new Peer(`${SECRET_PREFIX}${roomHash}_S${slotIndex}`, PEER_CONFIG);
     tempPeer.on('open', () => {
       peer = tempPeer; mySlotIndex = slotIndex; isConnected = true; connectBtn.disabled = false;
       connectBtn.textContent = "UZISH"; connectBtn.classList.add('disconnect');
       channelInput.disabled = true; passInput.disabled = true;
-      statusLed.className = 'led online'; modeLabel.textContent = "24/7 EFIR FAOL";
-      channelDisplay.textContent = displayCh.toUpperCase(); statusText.textContent = "Ulandi • Ekran o'chsa ham ishlaydi";
+      statusLed.className = 'led online'; modeLabel.textContent = `SLOT #${slotIndex} FAOL`;
+      channelDisplay.textContent = displayCh.toUpperCase();
+      updatePeerCount();
       setupPeerListeners();
-      callExistingSlots(slotIndex);
+      connectToLowerSlots();
       startHeartbeatLoop();
     });
     tempPeer.on('disconnected', () => { if (isConnected && peer && !peer.destroyed) peer.reconnect(); });
     tempPeer.on('error', (err) => {
-      if (err.type === 'unavailable-id') { tempPeer.destroy(); trySlot(slotIndex + 1, displayCh); }
-      else { statusText.textContent = "Qayta ulanilmoqda..."; connectBtn.disabled = false; }
+      if (err.type === 'unavailable-id') {
+        tempPeer.destroy();
+        trySlot(slotIndex + 1, displayCh);
+      } else if (err.type === 'peer-unavailable') {
+        // Bo'sh slotga qo'ng'iroq ketganda xato chiqarmaslik
+      } else {
+        statusText.textContent = "Tarmoq tiklanmoqda...";
+        connectBtn.disabled = false;
+      }
     });
   }
 
@@ -304,6 +336,7 @@
     dc.on('open', () => { dataConns[dc.peer] = dc; });
     dc.on('data', (msg) => { if (msg === 'PING' && dc.open) dc.send('PONG'); });
     dc.on('close', () => { delete dataConns[dc.peer]; });
+    dc.on('error', () => { delete dataConns[dc.peer]; });
   }
 
   function setupPeerListeners() {
@@ -313,27 +346,20 @@
     });
     peer.on('call', (call) => {
       if (!call.peer.startsWith(`${SECRET_PREFIX}${roomHash}_`)) { call.close(); return; }
-      call.answer(processedStream); handleCall(call);
+      if (activeCalls[call.peer]) {
+        try { activeCalls[call.peer].close(); } catch (e) {}
+      }
+      call.answer(processedStream);
+      handleCall(call);
     });
   }
 
-  function callExistingSlots(myIndex) {
-    for (let i = 1; i <= MAX_SLOTS; i++) {
-      if (i === myIndex) continue;
-      const targetId = `${SECRET_PREFIX}${roomHash}_S${i}`;
-      const call = peer.call(targetId, processedStream);
-      if (call) handleCall(call);
-      const dc = peer.connect(targetId);
-      if (dc) handleDataConn(dc);
-    }
-  }
-
   function handleCall(call) {
+    activeCalls[call.peer] = call;
     call.on('stream', (remoteStream) => {
       activeCalls[call.peer] = call;
       attachRemoteAudio(call.peer, remoteStream);
       updatePeerCount();
-      statusText.textContent = "Qurilma aloqada (Orqa fon faol)";
     });
     call.on('close', () => removePeer(call.peer));
     call.on('error', () => removePeer(call.peer));
@@ -365,7 +391,7 @@
   function stopTalking() {
     if (!isTransmitting) return;
     isTransmitting = false; setMicEnabled(false); playBeep('roger');
-    pttBtn.classList.remove('transmitting'); pttLabel.textContent = "BOSIB GAPIRING"; statusLed.className = isConnected ? 'led online' : 'led'; modeLabel.textContent = isConnected ? "24/7 EFIR FAOL" : "KUTISH REJIMI";
+    pttBtn.classList.remove('transmitting'); pttLabel.textContent = "BOSIB GAPIRING"; statusLed.className = isConnected ? 'led online' : 'led'; modeLabel.textContent = isConnected ? `SLOT #${mySlotIndex} FAOL` : "KUTISH REJIMI";
   }
 
   pttBtn.addEventListener('mousedown', (e) => { e.preventDefault(); if (!isLocked) startTalking(); });
@@ -387,7 +413,7 @@
       statusText.textContent = "TEST REJIMI: PTT bosib ovozingizni eshiting";
     } else {
       stopTalking(); if (testAudioEl) { testAudioEl.pause(); testAudioEl = null; }
-      statusText.textContent = isConnected ? "Aloqa o'rnatildi" : "Test yakunlandi";
+      updatePeerCount();
     }
   });
 </script>
