@@ -58,7 +58,7 @@
 <div class="radio-body">
   <div class="top-bar">
     <div class="brand"><div class="led" id="statusLed"></div>UZ-TAC PRO</div>
-    <div style="font-size: 11px; color: var(--green);">⚡ ORQA FON TAYYOR</div>
+    <div style="font-size: 11px; color: var(--green);" id="keepAliveBadge">⚡ UYG'OQ REJIM</div>
   </div>
   <div class="screen">
     <div class="screen-header">
@@ -91,7 +91,7 @@
       <span class="ptt-sub">PTT REJIMI</span>
     </button>
   </div>
-  <div class="peers-info">Ekran o'chganda ham aloqa uzilmaydi • UZTAC_V2</div>
+  <div class="peers-info">Ekran o'chiq holatda ham 24/7 aloqa • UZTAC_V2.1</div>
 </div>
 <div id="remoteAudios" style="display:none;"></div>
 
@@ -99,8 +99,9 @@
 <script>
   const SECRET_PREFIX = "UZTAC_PRIVATE_V2_";
   const MAX_SLOTS = 8;
-  let peer = null, localStream = null, processedStream = null, audioCtx = null, micGainNode = null, analyser = null, wakeLock = null;
-  let activeCalls = {}, isConnected = false, isTransmitting = false, isLocked = false, isBoosted = false, isTesting = false, roomHash = "", reconnectTimer = null;
+  let peer = null, localStream = null, processedStream = null, audioCtx = null, micGainNode = null, analyser = null;
+  let activeCalls = {}, dataConns = {}, isConnected = false, isTransmitting = false, isLocked = false, isBoosted = false, isTesting = false;
+  let roomHash = "", mySlotIndex = 1, currentChannel = "", heartbeatTimer = null, silentOsc = null;
 
   const statusLed = document.getElementById('statusLed'), modeLabel = document.getElementById('modeLabel'), peerCount = document.getElementById('peerCount');
   const channelDisplay = document.getElementById('channelDisplay'), statusText = document.getElementById('statusText');
@@ -126,8 +127,39 @@
 
   togglePassBtn.addEventListener('click', () => { passInput.type = passInput.type === 'password' ? 'text' : 'password'; });
 
-  async function requestWakeLock() {
-    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  // Android tizimi ilovani uyquga ketkazmasligi uchun eshitilmaydigan signal
+  function startSilentKeepAlive() {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      if (silentOsc) return;
+
+      silentOsc = audioCtx.createOscillator();
+      const silentGain = audioCtx.createGain();
+      silentOsc.frequency.value = 18000;
+      silentGain.gain.value = 0.0001; // Quloqqa umuman eshitilmaydi, lekin Android audio kanalini ochiq ushlaydi
+      silentOsc.connect(silentGain);
+      silentGain.connect(audioCtx.destination);
+      silentOsc.start();
+
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: 'UZ-TAC Ratsiya Faol',
+          artist: 'Kanal: ' + currentChannel.toUpperCase()
+        });
+        navigator.mediaSession.playbackState = 'playing';
+      }
+    } catch (e) {}
+  }
+
+  function stopSilentKeepAlive() {
+    try {
+      if (silentOsc) {
+        silentOsc.stop();
+        silentOsc.disconnect();
+        silentOsc = null;
+      }
+    } catch (e) {}
   }
 
   function generateRoomHash(channel, password) {
@@ -190,38 +222,76 @@
 
   function attachRemoteAudio(peerId, stream) {
     let audio = document.getElementById('audio_' + peerId);
-    if (!audio) { audio = document.createElement('audio'); audio.id = 'audio_' + peerId; audio.autoplay = true; audio.setAttribute('playsinline', ''); remoteAudios.appendChild(audio); }
-    audio.srcObject = stream; audio.volume = 1.0; audio.play().catch(() => {});
+    if (!audio) {
+      audio = document.createElement('audio');
+      audio.id = 'audio_' + peerId;
+      audio.autoplay = true;
+      audio.setAttribute('playsinline', '');
+      remoteAudios.appendChild(audio);
+    }
+    audio.srcObject = stream;
+    audio.volume = 1.0;
+    audio.play().catch(() => {});
   }
 
   function removePeer(peerId) {
     if (activeCalls[peerId]) { activeCalls[peerId].close(); delete activeCalls[peerId]; }
-    const audio = document.getElementById('audio_' + peerId); if (audio) audio.remove();
+    if (dataConns[peerId]) { dataConns[peerId].close(); delete dataConns[peerId]; }
+    const audio = document.getElementById('audio_' + peerId);
+    if (audio) audio.remove();
     updatePeerCount();
   }
 
   async function connectToChannel() {
     const ch = channelInput.value.trim(), pw = passInput.value.trim();
     if (!ch || !pw) { statusText.textContent = "Kanal va parolni kiriting!"; return; }
+    currentChannel = ch;
     localStorage.setItem('uztac_ch', ch); localStorage.setItem('uztac_pw', pw);
     const ok = await initAudio(); if (!ok) return;
-    if (audioCtx.state === 'suspended') await audioCtx.resume();
-    requestWakeLock();
+    startSilentKeepAlive();
     roomHash = generateRoomHash(ch, pw);
     statusText.textContent = "Tarmoqqa ulanilmoqda..."; connectBtn.disabled = true;
     trySlot(1, ch);
+  }
+
+  function startHeartbeatLoop() {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = setInterval(() => {
+      if (!isConnected) return;
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+      if (peer && peer.disconnected && !peer.destroyed) {
+        peer.reconnect();
+      }
+      // Barcha ulangan qurilmalarga "ping" yuborib aloqani tirik ushlash
+      Object.values(dataConns).forEach(dc => {
+        if (dc && dc.open) dc.send('PING');
+      });
+      // Ulanmay qolgan slotlarni qayta tekshirish
+      for (let i = 1; i <= MAX_SLOTS; i++) {
+        if (i === mySlotIndex) continue;
+        const targetId = `${SECRET_PREFIX}${roomHash}_S${i}`;
+        if (!activeCalls[targetId] && peer && !peer.destroyed) {
+          const call = peer.call(targetId, processedStream);
+          if (call) handleCall(call);
+          const dc = peer.connect(targetId);
+          if (dc) handleDataConn(dc);
+        }
+      }
+    }, 15000);
   }
 
   function trySlot(slotIndex, displayCh) {
     if (slotIndex > MAX_SLOTS) { statusText.textContent = "Kanal to'la (Maksimal 8 qurilma)"; connectBtn.disabled = false; return; }
     const tempPeer = new Peer(`${SECRET_PREFIX}${roomHash}_S${slotIndex}`, { debug: 0 });
     tempPeer.on('open', () => {
-      peer = tempPeer; isConnected = true; connectBtn.disabled = false;
+      peer = tempPeer; mySlotIndex = slotIndex; isConnected = true; connectBtn.disabled = false;
       connectBtn.textContent = "UZISH"; connectBtn.classList.add('disconnect');
       channelInput.disabled = true; passInput.disabled = true;
-      statusLed.className = 'led online'; modeLabel.textContent = "EFIR TAYYOR";
-      channelDisplay.textContent = displayCh.toUpperCase(); statusText.textContent = "Aloqa o'rnatildi";
-      setupPeerListeners(); callExistingSlots(slotIndex);
+      statusLed.className = 'led online'; modeLabel.textContent = "24/7 EFIR FAOL";
+      channelDisplay.textContent = displayCh.toUpperCase(); statusText.textContent = "Ulandi • Ekran o'chsa ham ishlaydi";
+      setupPeerListeners();
+      callExistingSlots(slotIndex);
+      startHeartbeatLoop();
     });
     tempPeer.on('disconnected', () => { if (isConnected && peer && !peer.destroyed) peer.reconnect(); });
     tempPeer.on('error', (err) => {
@@ -230,7 +300,17 @@
     });
   }
 
+  function handleDataConn(dc) {
+    dc.on('open', () => { dataConns[dc.peer] = dc; });
+    dc.on('data', (msg) => { if (msg === 'PING' && dc.open) dc.send('PONG'); });
+    dc.on('close', () => { delete dataConns[dc.peer]; });
+  }
+
   function setupPeerListeners() {
+    peer.on('connection', (dc) => {
+      if (!dc.peer.startsWith(`${SECRET_PREFIX}${roomHash}_`)) { dc.close(); return; }
+      handleDataConn(dc);
+    });
     peer.on('call', (call) => {
       if (!call.peer.startsWith(`${SECRET_PREFIX}${roomHash}_`)) { call.close(); return; }
       call.answer(processedStream); handleCall(call);
@@ -240,17 +320,28 @@
   function callExistingSlots(myIndex) {
     for (let i = 1; i <= MAX_SLOTS; i++) {
       if (i === myIndex) continue;
-      const call = peer.call(`${SECRET_PREFIX}${roomHash}_S${i}`, processedStream);
+      const targetId = `${SECRET_PREFIX}${roomHash}_S${i}`;
+      const call = peer.call(targetId, processedStream);
       if (call) handleCall(call);
+      const dc = peer.connect(targetId);
+      if (dc) handleDataConn(dc);
     }
   }
 
   function handleCall(call) {
-    call.on('stream', (remoteStream) => { activeCalls[call.peer] = call; attachRemoteAudio(call.peer, remoteStream); updatePeerCount(); statusText.textContent = "Qurilma aloqada"; });
-    call.on('close', () => removePeer(call.peer)); call.on('error', () => removePeer(call.peer));
+    call.on('stream', (remoteStream) => {
+      activeCalls[call.peer] = call;
+      attachRemoteAudio(call.peer, remoteStream);
+      updatePeerCount();
+      statusText.textContent = "Qurilma aloqada (Orqa fon faol)";
+    });
+    call.on('close', () => removePeer(call.peer));
+    call.on('error', () => removePeer(call.peer));
   }
 
   function disconnectChannel() {
+    clearInterval(heartbeatTimer);
+    stopSilentKeepAlive();
     if (isTransmitting) stopTalking();
     Object.keys(activeCalls).forEach(removePeer);
     if (peer) { peer.destroy(); peer = null; }
@@ -266,6 +357,7 @@
   function startTalking() {
     if (!isConnected && !isTesting) { statusText.textContent = "Avval kanalga ulaning yoki TEST bosing!"; return; }
     if (isTransmitting) return;
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     isTransmitting = true; setMicEnabled(true); playBeep('ptt_on');
     pttBtn.classList.add('transmitting'); pttLabel.textContent = "EFIRDA (GAPIRING)"; statusLed.className = 'led tx'; modeLabel.textContent = "UZATISH (TX)";
   }
@@ -273,7 +365,7 @@
   function stopTalking() {
     if (!isTransmitting) return;
     isTransmitting = false; setMicEnabled(false); playBeep('roger');
-    pttBtn.classList.remove('transmitting'); pttLabel.textContent = "BOSIB GAPIRING"; statusLed.className = isConnected ? 'led online' : 'led'; modeLabel.textContent = isConnected ? "EFIR TAYYOR" : "KUTISH REJIMI";
+    pttBtn.classList.remove('transmitting'); pttLabel.textContent = "BOSIB GAPIRING"; statusLed.className = isConnected ? 'led online' : 'led'; modeLabel.textContent = isConnected ? "24/7 EFIR FAOL" : "KUTISH REJIMI";
   }
 
   pttBtn.addEventListener('mousedown', (e) => { e.preventDefault(); if (!isLocked) startTalking(); });
