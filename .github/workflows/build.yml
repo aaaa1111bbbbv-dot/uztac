@@ -1,62 +1,470 @@
-name: Build APK
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval' data: blob: mediastream:;" />
+  <title>UZ-TAC Ratsiya Pro</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1215;
+      --panel: #181d23;
+      --panel-light: #222933;
+      --accent: #ff9800;
+      --green: #00e676;
+      --red: #ff3d00;
+      --text: #eceff1;
+      --muted: #78909c;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-tap-highlight-color: transparent; font-family: 'Segoe UI', Roboto, monospace, sans-serif; }
+    body { background: var(--bg); color: var(--text); min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 12px; }
+    .radio-body { width: 100%; max-width: 400px; background: linear-gradient(145deg, #1d232a, #12161b); border: 2px solid #2c3540; border-radius: 28px; padding: 18px; box-shadow: 0 20px 50px rgba(0,0,0,0.8); display: flex; flex-direction: column; gap: 14px; }
+    .top-bar { display: flex; justify-content: space-between; align-items: center; padding: 0 4px; }
+    .brand { font-weight: 800; font-size: 15px; letter-spacing: 1.5px; color: var(--accent); display: flex; align-items: center; gap: 6px; }
+    .led { width: 10px; height: 10px; border-radius: 50%; background: #455a64; transition: 0.2s; }
+    .led.online { background: var(--green); box-shadow: 0 0 10px var(--green); }
+    .led.tx { background: var(--red); box-shadow: 0 0 12px var(--red); }
+    .screen { background: #0b1914; border: 2px solid #263832; border-radius: 14px; padding: 14px; box-shadow: inset 0 0 18px rgba(0, 0, 0, 0.9); display: flex; flex-direction: column; gap: 10px; }
+    .screen-header { display: flex; justify-content: space-between; font-size: 11px; color: #4db6ac; text-transform: uppercase; letter-spacing: 1px; }
+    .channel-display { font-size: 26px; font-weight: 800; color: var(--green); text-shadow: 0 0 8px rgba(0, 230, 118, 0.4); letter-spacing: 2px; text-align: center; padding: 4px 0; }
+    .status-text { font-size: 12px; text-align: center; color: #80cbc4; min-height: 16px; }
+    .visualizer { display: flex; justify-content: center; align-items: flex-end; gap: 4px; height: 26px; padding-top: 4px; }
+    .bar { width: 6px; height: 4px; background: #1b5e20; border-radius: 2px; transition: height 0.08s ease; }
+    .bar.tx-active { background: var(--red); }
+    .conn-box { background: var(--panel); padding: 12px; border-radius: 16px; border: 1px solid #2a333d; display: flex; flex-direction: column; gap: 10px; }
+    .input-stack { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+    .input-group { position: relative; width: 100%; display: flex; align-items: center; }
+    input { width: 100%; background: #0f1318; border: 1px solid #37474f; color: #fff; padding: 11px 14px; border-radius: 10px; font-size: 15px; font-weight: 700; letter-spacing: 1px; outline: none; user-select: text; }
+    input#passInput { padding-right: 42px; }
+    input:focus { border-color: var(--accent); }
+    input:disabled { opacity: 0.5; }
+    .eye-btn { position: absolute; right: 10px; background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 4px; }
+    .btn-connect { width: 100%; background: var(--accent); color: #000; border: none; padding: 12px; border-radius: 10px; font-weight: 800; font-size: 14px; cursor: pointer; letter-spacing: 0.8px; }
+    .btn-connect.disconnect { background: var(--red); color: #fff; }
+    .controls-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .tool-btn { background: var(--panel-light); border: 1px solid #323c47; color: var(--text); padding: 10px 6px; border-radius: 12px; font-size: 11px; font-weight: 700; cursor: pointer; text-align: center; }
+    .tool-btn.active { background: rgba(255, 152, 0, 0.18); border-color: var(--accent); color: var(--accent); }
+    .ptt-wrapper { display: flex; justify-content: center; padding: 6px 0 2px; }
+    .ptt-btn { width: 165px; height: 165px; border-radius: 50%; background: radial-gradient(circle at 30% 30%, #2e3742, #171c22); border: 6px solid #2b333d; box-shadow: 0 12px 28px rgba(0,0,0,0.7); color: var(--text); display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 6px; cursor: pointer; }
+    .ptt-btn svg { width: 40px; height: 40px; fill: var(--muted); }
+    .ptt-label { font-size: 13px; font-weight: 800; letter-spacing: 1px; }
+    .ptt-sub { font-size: 10px; color: var(--muted); }
+    .ptt-btn.transmitting { background: radial-gradient(circle at 30% 30%, #ff5722, #b71c1c); border-color: #ff8a65; box-shadow: 0 0 35px rgba(255, 61, 0, 0.6); transform: scale(0.96); }
+    .ptt-btn.transmitting svg { fill: #fff; }
+    .peers-info { text-align: center; font-size: 11px; color: var(--muted); }
 
-on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch:
+    /* Yaratuvchi ruxsat kodi oynasi */
+    .auth-overlay { position: fixed; inset: 0; background: rgba(10, 13, 17, 0.97); z-index: 9999; display: flex; justify-content: center; align-items: center; padding: 20px; }
+    .auth-overlay.hidden { display: none; }
+    .auth-card { width: 100%; max-width: 340px; background: #181d23; border: 2px solid var(--accent); border-radius: 22px; padding: 24px 20px; display: flex; flex-direction: column; gap: 14px; text-align: center; box-shadow: 0 0 40px rgba(255, 152, 0, 0.25); }
+    .auth-title { font-size: 17px; font-weight: 800; color: var(--accent); letter-spacing: 1px; }
+    .auth-desc { font-size: 12px; color: var(--muted); line-height: 1.5; }
+    .auth-err { font-size: 12px; color: var(--red); min-height: 16px; font-weight: 700; }
+  </style>
+</head>
+<body>
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+<div class="auth-overlay" id="authOverlay">
+  <div class="auth-card">
+    <div style="font-size: 36px;">🔐</div>
+    <div class="auth-title">YARATUVCHI RUXSATI</div>
+    <div class="auth-desc">Ilovadan foydalanish uchun yaratuvchi ruxsat kodini kiriting (faqat 1 marta so'raladi)</div>
+    <input type="password" id="creatorCodeInput" placeholder="Ruxsat kodini kiriting..." autocomplete="off" />
+    <div class="auth-err" id="authErr"></div>
+    <button class="btn-connect" id="authSubmitBtn">TASDIQLASH</button>
+  </div>
+</div>
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+<div class="radio-body">
+  <div class="top-bar">
+    <div class="brand"><div class="led" id="statusLed"></div>UZ-TAC PRO</div>
+    <div style="font-size: 11px; color: var(--green);">⚡ TEZKOR ALOQA</div>
+  </div>
+  <div class="screen">
+    <div class="screen-header">
+      <span id="modeLabel">KUTISH REJIMI</span>
+      <span id="peerCount">0 QURILMA</span>
+    </div>
+    <div class="channel-display" id="channelDisplay">KANAL YO'Q</div>
+    <div class="status-text" id="statusText">Kanal va parolni kiriting</div>
+    <div class="visualizer" id="visualizer"></div>
+  </div>
+  <div class="conn-box">
+    <div class="input-stack">
+      <div class="input-group">
+        <input type="text" id="channelInput" placeholder="KANAL RAQAMI (Masalan: 400)" maxlength="16" />
+      </div>
+      <div class="input-group">
+        <input type="password" id="passInput" placeholder="MAXFIY PAROL" maxlength="16" />
+        <button type="button" class="eye-btn" id="togglePassBtn">👁️</button>
+      </div>
+    </div>
+    <button class="btn-connect" id="connectBtn">ULANISH</button>
+  </div>
+  <div class="controls-row">
+    <button class="tool-btn" id="lockBtn">🔓 QULFLASH</button>
+    <button class="tool-btn" id="boostBtn">🔊 OVOZ 2.2X</button>
+    <button class="tool-btn" id="testBtn">🎙️ TEST</button>
+  </div>
+  <div class="ptt-wrapper">
+    <button class="ptt-btn" id="pttBtn">
+      <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/></svg>
+      <span class="ptt-label" id="pttLabel">BOSIB GAPIRING</span>
+      <span class="ptt-sub">PTT REJIMI</span>
+    </button>
+  </div>
+  <div class="peers-info">Tezkor aloqa • UZTAC_V2.3</div>
+</div>
+<div id="remoteAudios" style="display:none;"></div>
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+<script src="cordova.js"></script>
+<script>
+  // 1-MARTALIK YARATUVCHI RUXSAT KODI TEKSHIRUVI ("Alisa")
+  const authOverlay = document.getElementById('authOverlay');
+  const creatorCodeInput = document.getElementById('creatorCodeInput');
+  const authSubmitBtn = document.getElementById('authSubmitBtn');
+  const authErr = document.getElementById('authErr');
 
-      - name: Android SDK litsenziyalarini tasdiqlash
-        run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0"
+  if (localStorage.getItem('uztac_creator_unlocked') === 'true') {
+    authOverlay.classList.add('hidden');
+  }
 
-      - name: Loyihani avtomatik tayyorlash va APK yig'ish
-        run: |
-          npm install -g cordova
-          cordova create app uz.uztac.ratsiya "UZ-TAC Ratsiya"
-          find . -maxdepth 2 -iname "index.html" -exec cp {} app/www/index.html \;
-          cd app
-          cat << 'EOF' > config.xml
-          <?xml version='1.0' encoding='utf-8'?>
-          <widget id="uz.uztac.ratsiya" version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:android="http://schemas.android.com/apk/res/android">
-              <name>UZ-TAC Ratsiya</name>
-              <content src="index.html" />
-              <access origin="*" />
-              <preference name="KeepRunning" value="true" />
-              <preference name="Orientation" value="portrait" />
-              <platform name="android">
-                  <preference name="AndroidMinSdkVersion" value="24" />
-                  <preference name="AndroidTargetSdkVersion" value="34" />
-                  <config-file parent="/manifest" target="AndroidManifest.xml">
-                      <uses-permission android:name="android.permission.INTERNET" />
-                      <uses-permission android:name="android.permission.RECORD_AUDIO" />
-                      <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-                      <uses-permission android:name="android.permission.WAKE_LOCK" />
-                  </config-file>
-              </platform>
-          </widget>
-          EOF
-          cordova plugin add cordova-plugin-android-permissions cordova-plugin-insomnia
-          cordova platform add android --no-telemetry
-          cordova build android --debug --no-telemetry
+  function verifyCreatorCode() {
+    const val = creatorCodeInput.value.trim();
+    if (val.toLowerCase() === 'alisa') {
+      localStorage.setItem('uztac_creator_unlocked', 'true');
+      authOverlay.classList.add('hidden');
+    } else {
+      authErr.textContent = "❌ Ruxsat kodi noto'g'ri!";
+      creatorCodeInput.value = '';
+    }
+  }
 
-      - name: Tayyor APK ni yuklash
-        uses: actions/upload-artifact@v4
-        with:
-          name: UZTAC-Ratsiya-APK
-          path: app/platforms/android/app/build/outputs/apk/debug/app-debug.apk
+  authSubmitBtn.addEventListener('click', verifyCreatorCode);
+  creatorCodeInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') verifyCreatorCode(); });
+
+  const SECRET_PREFIX = "UZTAC_V23_";
+  const MAX_SLOTS = 8;
+
+  const PEER_CONFIG = {
+    debug: 0,
+    pingInterval: 3000,
+    config: {
+      iceCandidatePoolSize: 10,
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+        { urls: "stun:stun2.l.google.com:19302" },
+        { urls: "stun:global.stun.twilio.com:3478" },
+        {
+          urls: "turn:openrelay.metered.ca:80",
+          username: "openrelayproject",
+          credential: "openrelayproject"
+        },
+        {
+          urls: "turn:openrelay.metered.ca:443",
+          username: "openrelayproject",
+          credential: "openrelayproject"
+        }
+      ]
+    }
+  };
+
+  let peer = null, localStream = null, processedStream = null, audioCtx = null, micGainNode = null, analyser = null;
+  let activeCalls = {}, dataConns = {}, isConnected = false, isTransmitting = false, isLocked = false, isBoosted = false, isTesting = false;
+  let roomHash = "", mySlotIndex = 1, currentChannel = "", heartbeatTimer = null, silentOsc = null;
+
+  const statusLed = document.getElementById('statusLed'), modeLabel = document.getElementById('modeLabel'), peerCount = document.getElementById('peerCount');
+  const channelDisplay = document.getElementById('channelDisplay'), statusText = document.getElementById('statusText');
+  const channelInput = document.getElementById('channelInput'), passInput = document.getElementById('passInput'), togglePassBtn = document.getElementById('togglePassBtn');
+  const connectBtn = document.getElementById('connectBtn'), lockBtn = document.getElementById('lockBtn'), boostBtn = document.getElementById('boostBtn'), testBtn = document.getElementById('testBtn');
+  const pttBtn = document.getElementById('pttBtn'), pttLabel = document.getElementById('pttLabel'), visualizer = document.getElementById('visualizer'), remoteAudios = document.getElementById('remoteAudios');
+
+  for (let i = 0; i < 16; i++) { const b = document.createElement('div'); b.className = 'bar'; visualizer.appendChild(b); }
+  const bars = document.querySelectorAll('.bar');
+
+  channelInput.value = localStorage.getItem('uztac_ch') || '';
+  passInput.value = localStorage.getItem('uztac_pw') || '';
+
+  document.addEventListener("deviceready", function () {
+    if (window.cordova && cordova.plugins && cordova.plugins.permissions) {
+      const p = cordova.plugins.permissions;
+      p.requestPermissions([p.RECORD_AUDIO, "android.permission.POST_NOTIFICATIONS"], function() {}, function() {});
+    }
+    if (window.plugins && window.plugins.insomnia) {
+      window.plugins.insomnia.keepAwake();
+    }
+  }, false);
+
+  togglePassBtn.addEventListener('click', () => { passInput.type = passInput.type === 'password' ? 'text' : 'password'; });
+
+  function startSilentKeepAlive() {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      if (silentOsc) return;
+      silentOsc = audioCtx.createOscillator();
+      const silentGain = audioCtx.createGain();
+      silentOsc.frequency.value = 18000;
+      silentGain.gain.value = 0.0001;
+      silentOsc.connect(silentGain);
+      silentGain.connect(audioCtx.destination);
+      silentOsc.start();
+    } catch (e) {}
+  }
+
+  function stopSilentKeepAlive() {
+    try { if (silentOsc) { silentOsc.stop(); silentOsc.disconnect(); silentOsc = null; } } catch (e) {}
+  }
+
+  function generateRoomHash(channel, password) {
+    const raw = `${SECRET_PREFIX}${channel.trim().toUpperCase()}::${password.trim()}`;
+    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+    for (let i = 0; i < raw.length; i++) {
+      const ch = raw.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36).toUpperCase();
+  }
+
+  function playBeep(type) {
+    try {
+      const ctx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      if (type === 'ptt_on') { osc.frequency.setValueAtTime(950, ctx.currentTime); gain.gain.setValueAtTime(0.12, ctx.currentTime); osc.start(); osc.stop(ctx.currentTime + 0.07); }
+      else if (type === 'roger') { osc.frequency.setValueAtTime(1200, ctx.currentTime); osc.frequency.setValueAtTime(1550, ctx.currentTime + 0.08); gain.gain.setValueAtTime(0.15, ctx.currentTime); osc.start(); osc.stop(ctx.currentTime + 0.18); }
+    } catch (e) {}
+  }
+
+  async function initAudio() {
+    if (processedStream) return true;
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createMediaStreamSource(localStream);
+      micGainNode = audioCtx.createGain(); micGainNode.gain.value = isBoosted ? 2.2 : 1.0;
+      analyser = audioCtx.createAnalyser(); analyser.fftSize = 64;
+      const dest = audioCtx.createMediaStreamDestination();
+      source.connect(micGainNode); micGainNode.connect(analyser); micGainNode.connect(dest);
+      processedStream = dest.stream;
+      setMicEnabled(false); animateVisualizer(); return true;
+    } catch (err) { statusText.textContent = "Mikrofonga ruxsat berilmadi!"; return false; }
+  }
+
+  function setMicEnabled(enabled) {
+    if (localStream) localStream.getAudioTracks().forEach(t => t.enabled = enabled);
+    if (processedStream) processedStream.getAudioTracks().forEach(t => t.enabled = enabled);
+  }
+
+  function animateVisualizer() {
+    if (!analyser) return;
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    function draw() {
+      requestAnimationFrame(draw); analyser.getByteFrequencyData(data);
+      bars.forEach((bar, idx) => {
+        const val = data[idx] || 0;
+        bar.style.height = (isTransmitting ? Math.max(4, (val / 255) * 26) : 4) + 'px';
+        bar.className = 'bar' + (isTransmitting && val > 20 ? ' tx-active' : '');
+      });
+    }
+    draw();
+  }
+
+  function updatePeerCount() {
+    const count = Object.keys(activeCalls).length;
+    peerCount.textContent = `${count} QURILMA`;
+    if (isConnected) {
+      statusText.textContent = count > 0 ? `Aloqa barqaror (${count} qurilma)` : "Boshqa qurilma kutilmoqda...";
+    }
+  }
+
+  function attachRemoteAudio(peerId, stream) {
+    let audio = document.getElementById('audio_' + peerId);
+    if (!audio) {
+      audio = document.createElement('audio');
+      audio.id = 'audio_' + peerId;
+      audio.autoplay = true;
+      audio.setAttribute('playsinline', '');
+      remoteAudios.appendChild(audio);
+    }
+    audio.srcObject = stream;
+    audio.volume = 1.0;
+    audio.play().catch(() => {});
+  }
+
+  function removePeer(peerId) {
+    if (activeCalls[peerId]) {
+      try { activeCalls[peerId].close(); } catch (e) {}
+      delete activeCalls[peerId];
+    }
+    if (dataConns[peerId]) {
+      try { dataConns[peerId].close(); } catch (e) {}
+      delete dataConns[peerId];
+    }
+    const audio = document.getElementById('audio_' + peerId);
+    if (audio) audio.remove();
+    updatePeerCount();
+  }
+
+  async function connectToChannel() {
+    const ch = channelInput.value.trim(), pw = passInput.value.trim();
+    if (!ch || !pw) { statusText.textContent = "Kanal va parolni kiriting!"; return; }
+    currentChannel = ch;
+    localStorage.setItem('uztac_ch', ch); localStorage.setItem('uztac_pw', pw);
+    statusText.textContent = "Tezkor ulanish..."; connectBtn.disabled = true;
+    const ok = await initAudio();
+    if (!ok) { connectBtn.disabled = false; return; }
+    startSilentKeepAlive();
+    roomHash = generateRoomHash(ch, pw);
+    trySlot(1, ch);
+  }
+
+  function connectToLowerSlots() {
+    if (!isConnected || !peer || peer.destroyed) return;
+    for (let i = 1; i < mySlotIndex; i++) {
+      const targetId = `${SECRET_PREFIX}${roomHash}_S${i}`;
+      if (!activeCalls[targetId]) {
+        const call = peer.call(targetId, processedStream);
+        if (call) handleCall(call);
+        const dc = peer.connect(targetId, { reliable: false });
+        if (dc) handleDataConn(dc);
+      }
+    }
+  }
+
+  function startHeartbeatLoop() {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = setInterval(() => {
+      if (!isConnected) return;
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+      if (peer && peer.disconnected && !peer.destroyed) {
+        peer.reconnect();
+      }
+      Object.values(dataConns).forEach(dc => {
+        if (dc && dc.open) {
+          try { dc.send('PING'); } catch (e) {}
+        }
+      });
+      connectToLowerSlots();
+    }, 2500);
+  }
+
+  function trySlot(slotIndex, displayCh) {
+    if (slotIndex > MAX_SLOTS) { statusText.textContent = "Kanal to'la (Maksimal 8 qurilma)"; connectBtn.disabled = false; return; }
+    const tempPeer = new Peer(`${SECRET_PREFIX}${roomHash}_S${slotIndex}`, PEER_CONFIG);
+    tempPeer.on('open', () => {
+      peer = tempPeer; mySlotIndex = slotIndex; isConnected = true; connectBtn.disabled = false;
+      connectBtn.textContent = "UZISH"; connectBtn.classList.add('disconnect');
+      channelInput.disabled = true; passInput.disabled = true;
+      statusLed.className = 'led online'; modeLabel.textContent = `SLOT #${slotIndex} FAOL`;
+      channelDisplay.textContent = displayCh.toUpperCase();
+      updatePeerCount();
+      setupPeerListeners();
+      connectToLowerSlots();
+      startHeartbeatLoop();
+    });
+    tempPeer.on('disconnected', () => { if (isConnected && peer && !peer.destroyed) peer.reconnect(); });
+    tempPeer.on('error', (err) => {
+      if (err.type === 'unavailable-id') {
+        tempPeer.destroy();
+        trySlot(slotIndex + 1, displayCh);
+      } else if (err.type === 'peer-unavailable') {
+        // Bo'sh slot
+      } else {
+        statusText.textContent = "Tarmoq tiklanmoqda...";
+        connectBtn.disabled = false;
+      }
+    });
+  }
+
+  function handleDataConn(dc) {
+    dc.on('open', () => { dataConns[dc.peer] = dc; });
+    dc.on('data', (msg) => { if (msg === 'PING' && dc.open) dc.send('PONG'); });
+    dc.on('close', () => { delete dataConns[dc.peer]; });
+    dc.on('error', () => { delete dataConns[dc.peer]; });
+  }
+
+  function setupPeerListeners() {
+    peer.on('connection', (dc) => {
+      if (!dc.peer.startsWith(`${SECRET_PREFIX}${roomHash}_`)) { dc.close(); return; }
+      handleDataConn(dc);
+    });
+    peer.on('call', (call) => {
+      if (!call.peer.startsWith(`${SECRET_PREFIX}${roomHash}_`)) { call.close(); return; }
+      if (activeCalls[call.peer]) {
+        try { activeCalls[call.peer].close(); } catch (e) {}
+      }
+      call.answer(processedStream);
+      handleCall(call);
+    });
+  }
+
+  function handleCall(call) {
+    activeCalls[call.peer] = call;
+    call.on('stream', (remoteStream) => {
+      activeCalls[call.peer] = call;
+      attachRemoteAudio(call.peer, remoteStream);
+      updatePeerCount();
+    });
+    call.on('close', () => removePeer(call.peer));
+    call.on('error', () => removePeer(call.peer));
+  }
+
+  function disconnectChannel() {
+    clearInterval(heartbeatTimer);
+    stopSilentKeepAlive();
+    if (isTransmitting) stopTalking();
+    Object.keys(activeCalls).forEach(removePeer);
+    if (peer) { peer.destroy(); peer = null; }
+    isConnected = false; isLocked = false;
+    lockBtn.classList.remove('active'); connectBtn.textContent = "ULANISH"; connectBtn.classList.remove('disconnect');
+    channelInput.disabled = false; passInput.disabled = false;
+    statusLed.className = 'led'; modeLabel.textContent = "KUTISH REJIMI"; channelDisplay.textContent = "KANAL YO'Q"; statusText.textContent = "Aloqa uzildi";
+    updatePeerCount();
+  }
+
+  connectBtn.addEventListener('click', () => { if (isConnected) disconnectChannel(); else connectToChannel(); });
+
+  function startTalking() {
+    if (!isConnected && !isTesting) { statusText.textContent = "Avval kanalga ulaning yoki TEST bosing!"; return; }
+    if (isTransmitting) return;
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    isTransmitting = true; setMicEnabled(true); playBeep('ptt_on');
+    pttBtn.classList.add('transmitting'); pttLabel.textContent = "EFIRDA (GAPIRING)"; statusLed.className = 'led tx'; modeLabel.textContent = "UZATISH (TX)";
+  }
+
+  function stopTalking() {
+    if (!isTransmitting) return;
+    isTransmitting = false; setMicEnabled(false); playBeep('roger');
+    pttBtn.classList.remove('transmitting'); pttLabel.textContent = "BOSIB GAPIRING"; statusLed.className = isConnected ? 'led online' : 'led'; modeLabel.textContent = isConnected ? `SLOT #${mySlotIndex} FAOL` : "KUTISH REJIMI";
+  }
+
+  pttBtn.addEventListener('mousedown', (e) => { e.preventDefault(); if (!isLocked) startTalking(); });
+  pttBtn.addEventListener('mouseup', () => { if (!isLocked) stopTalking(); });
+  pttBtn.addEventListener('mouseleave', () => { if (!isLocked) stopTalking(); });
+  pttBtn.addEventListener('touchstart', (e) => { e.preventDefault(); if (!isLocked) startTalking(); }, { passive: false });
+  pttBtn.addEventListener('touchend', (e) => { e.preventDefault(); if (!isLocked) stopTalking(); });
+
+  lockBtn.addEventListener('click', () => { if (!isConnected && !isTesting) return; isLocked = !isLocked; lockBtn.classList.toggle('active', isLocked); if (isLocked) startTalking(); else stopTalking(); });
+  boostBtn.addEventListener('click', () => { isBoosted = !isBoosted; boostBtn.classList.toggle('active', isBoosted); if (micGainNode) micGainNode.gain.value = isBoosted ? 2.2 : 1.0; });
+
+  let testAudioEl = null;
+  testBtn.addEventListener('click', async () => {
+    isTesting = !isTesting; testBtn.classList.toggle('active', isTesting);
+    if (isTesting) {
+      const ok = await initAudio(); if (!ok) { isTesting = false; testBtn.classList.remove('active'); return; }
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      testAudioEl = document.createElement('audio'); testAudioEl.srcObject = processedStream; testAudioEl.play();
+      statusText.textContent = "TEST REJIMI: PTT bosib ovozingizni eshiting";
+    } else {
+      stopTalking(); if (testAudioEl) { testAudioEl.pause(); testAudioEl = null; }
+      updatePeerCount();
+    }
+  });
+</script>
+</body>
+</html>
