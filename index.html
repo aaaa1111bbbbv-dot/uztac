@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Ratsiya Pro - Guruh Aloqasi</title>
-    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <title>Ratsiya Pro v4</title>
+    <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
     <style>
         * { box-sizing: border-box; user-select: none; -webkit-user-select: none; font-family: 'Segoe UI', Roboto, sans-serif; }
         body { margin: 0; background: #121212; color: #fff; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
@@ -19,13 +19,12 @@
         button.primary-btn { width: 100%; padding: 14px; border: none; border-radius: 10px; background: #00e676; color: #000; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 12px; }
         button.primary-btn:active { background: #00c853; }
         button.secondary-btn { width: 100%; padding: 10px; border: 1px solid #444; border-radius: 10px; background: transparent; color: #bbb; font-size: 13px; cursor: pointer; margin-top: 8px; }
-        button.secondary-btn:active { background: #2e2e2e; }
         .error-msg { color: #ff5252; font-size: 13px; text-align: center; margin-top: 8px; display: none; }
         .saved-badge { font-size: 12px; color: #00e676; text-align: center; margin-bottom: 8px; display: none; }
 
         #radio-screen { display: none; flex-direction: column; height: 100%; justify-content: space-between; padding: 15px; }
         .header { display: flex; justify-content: space-between; align-items: center; background: #1f1f1f; padding: 12px 15px; border-radius: 12px; gap: 8px; }
-        .status-badge { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: bold; }
+        .status-badge { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: bold; }
         .dot { width: 10px; height: 10px; border-radius: 50%; background: #ff5252; flex-shrink: 0; }
         .dot.online { background: #00e676; box-shadow: 0 0 8px #00e676; }
         .header-actions { display: flex; gap: 6px; }
@@ -73,8 +72,8 @@
 
     <div id="login-screen" class="center-screen">
         <div class="card">
-            <h2>📻 Ratsiya Pro</h2>
-            <div id="saved-indicator" class="saved-badge">✓ Saqlangan ma'lumotlar yuklandi (tahrirlash mumkin)</div>
+            <h2>📻 Ratsiya Pro <span style="font-size:12px;color:#888;">v4</span></h2>
+            <div id="saved-indicator" class="saved-badge">✓ Saqlangan ma'lumotlar yuklandi</div>
             
             <label class="field-label" for="username">Ismingiz:</label>
             <input type="text" id="username" placeholder="Masalan: Ali" maxlength="15">
@@ -181,7 +180,7 @@
         });
 
         async function generateIsolatedChannelHash(groupName, password) {
-            const combined = `UZ_RATSIYA_MQTT_V1::${groupName.toLowerCase()}::${password}`;
+            const combined = `UZ_RATSIYA_V4::${groupName.toLowerCase()}::${password}`;
             if (window.crypto && window.crypto.subtle) {
                 const msgUint8 = new TextEncoder().encode(combined);
                 const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
@@ -198,10 +197,11 @@
             }
         }
 
-        // Ishonchli global WSS brokerlar (biri band bo'lsa ikkinchisiga o'tadi)
+        // Standart 443 port (HTTPS WSS) orqali ishlaydigan brokerlar (mobil tarmoqlar bloklamaydi)
         const BROKERS = [
+            'wss://broker.hivemq.com:8884/mqtt',
             'wss://broker.emqx.io:8084/mqtt',
-            'wss://broker.hivemq.com:8884/mqtt'
+            'wss://test.mosquitto.org:8081/mqtt'
         ];
         let brokerIdx = 0;
 
@@ -227,6 +227,7 @@
         let channelLockedBy = null;
         let wakeLock = null;
         let heartbeatTimer = null;
+        let connectWatchdog = null;
 
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         function playBeep(freq, duration) {
@@ -301,22 +302,37 @@
         }
 
         function connectBroker() {
+            clearTimeout(connectWatchdog);
             if (mqttClient) {
                 try { mqttClient.end(true); } catch (e) {}
             }
 
+            if (typeof mqtt === 'undefined') {
+                updateStatus(false, "Kutubxona yuklanmadi (Internetni tekshiring)");
+                return;
+            }
+
+            const currentNum = (brokerIdx % BROKERS.length) + 1;
             const brokerUrl = BROKERS[brokerIdx % BROKERS.length];
-            updateStatus(false, "Ulanmoqda...");
+            updateStatus(false, `Ulanmoqda (B${currentNum})...`);
 
             mqttClient = mqtt.connect(brokerUrl, {
                 clientId: 'uzr_' + myId + '_' + Date.now().toString(36),
                 keepalive: 25,
-                reconnectPeriod: 3000,
-                connectTimeout: 8000,
+                reconnectPeriod: 0,
+                connectTimeout: 6000,
                 clean: true
             });
 
+            connectWatchdog = setTimeout(() => {
+                if (!mqttClient || !mqttClient.connected) {
+                    brokerIdx++;
+                    connectBroker();
+                }
+            }, 6500);
+
             mqttClient.on('connect', () => {
+                clearTimeout(connectWatchdog);
                 updateStatus(true, "Aloqada");
                 activeUsers[myId] = myName + " (Siz)";
                 userLastSeen[myId] = Date.now();
@@ -397,10 +413,21 @@
                 }
             });
 
-            mqttClient.on('offline', () => updateStatus(false, "Qayta ulanmoqda..."));
+            mqttClient.on('close', () => {
+                clearTimeout(connectWatchdog);
+                updateStatus(false, "Qayta ulanmoqda...");
+                setTimeout(() => {
+                    if (document.getElementById('radio-screen').style.display === 'flex') {
+                        brokerIdx++;
+                        connectBroker();
+                    }
+                }, 2000);
+            });
+
             mqttClient.on('error', () => {
+                clearTimeout(connectWatchdog);
                 brokerIdx++;
-                updateStatus(false, "Ulanmoqda...");
+                setTimeout(connectBroker, 1500);
             });
         }
 
@@ -567,6 +594,7 @@
         }
 
         function editSettings() {
+            clearTimeout(connectWatchdog);
             sendSignal({ type: 'BYE', from: myId });
             clearInterval(heartbeatTimer);
             if (mqttClient) { try { mqttClient.end(true); } catch (e) {} mqttClient = null; }
@@ -585,6 +613,7 @@
         }
 
         function leaveRadio() {
+            clearTimeout(connectWatchdog);
             sendSignal({ type: 'BYE', from: myId });
             setTimeout(() => location.reload(), 150);
         }
