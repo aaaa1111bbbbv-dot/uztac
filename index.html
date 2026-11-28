@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Ratsiya Pro v8 - Zello Mode</title>
+    <title>Mukamal Ratsya v10</title>
     <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
     <style>
         * { box-sizing: border-box; user-select: none; -webkit-user-select: none; font-family: 'Segoe UI', Roboto, sans-serif; }
@@ -31,7 +31,8 @@
         .edit-btn { background: #2e2e2e; color: #00e676; border: 1px solid #00e676; padding: 7px 10px; border-radius: 8px; font-weight: bold; font-size: 12px; cursor: pointer; }
         .leave-btn { background: #ff5252; color: white; border: none; padding: 7px 10px; border-radius: 8px; font-weight: bold; font-size: 12px; cursor: pointer; }
 
-        .bg-banner { background: #1b3326; border: 1px solid #00e676; color: #a5d6a7; font-size: 12px; padding: 8px 12px; border-radius: 8px; margin-top: 8px; text-align: center; }
+        .mic-meter-wrap { width: 100%; height: 6px; background: #2c2c2c; border-radius: 4px; margin-top: 8px; overflow: hidden; }
+        .mic-meter-bar { height: 100%; width: 0%; background: #00e676; transition: width 0.08s; }
 
         .users-box { background: #1a1a1a; border-radius: 12px; padding: 12px; margin: 10px 0; flex-grow: 1; overflow-y: auto; border: 1px solid #2c2c2c; }
         .users-title { font-size: 13px; color: #aaa; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
@@ -43,7 +44,7 @@
 
         .ptt-container { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 10px 0; }
         #ptt-btn {
-            width: 190px; height: 190px; border-radius: 50%;
+            width: 195px; height: 195px; border-radius: 50%;
             background: radial-gradient(circle, #2e7d32 0%, #1b5e20 100%);
             border: 6px solid #388e3c; color: white; font-size: 20px; font-weight: bold;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -75,7 +76,7 @@
 
     <div id="login-screen" class="center-screen">
         <div class="card">
-            <h2>📻 Ratsiya Pro <span style="font-size:12px;color:#00e676;">v8</span></h2>
+            <h2>📻 Mukamal Ratsya <span style="font-size:12px;color:#00e676;">v10</span></h2>
             <div id="saved-indicator" class="saved-badge">✓ Saqlangan ma'lumotlar yuklandi</div>
             
             <label class="field-label" for="username">Ismingiz:</label>
@@ -105,7 +106,8 @@
                     <button class="leave-btn" onclick="leaveRadio()">Chiqish</button>
                 </div>
             </div>
-            <div class="bg-banner">🛡️ Zello rejimi: Ekran o'chiq bo'lsa ham ovoz yetib boradi</div>
+            <!-- Mikrofon ishlayotganini ko'rsatuvchi jonli daraja chizig'i -->
+            <div class="mic-meter-wrap"><div class="mic-meter-bar" id="mic-meter"></div></div>
         </div>
 
         <div class="users-box">
@@ -128,7 +130,7 @@
         const PROFILE_NAME_KEY = "ratsiya_saved_username_v2";
         const PROFILE_GROUP_KEY = "ratsiya_saved_groupname_v2";
         const PROFILE_ROOM_KEY = "ratsiya_saved_roomcode_v2";
-        const ACTIVE_SESSION_KEY = "ratsiya_stay_connected_v8";
+        const ACTIVE_SESSION_KEY = "ratsiya_stay_connected_v10";
         const CLIENT_ID_KEY = "ratsiya_persistent_client_id_v1";
 
         let myId = localStorage.getItem(CLIENT_ID_KEY);
@@ -202,7 +204,7 @@
         });
 
         async function generateIsolatedChannelHash(groupName, password) {
-            const combined = `UZ_RATSIYA_V8::${groupName.trim().toLowerCase()}::${password.trim()}`;
+            const combined = `UZ_RATSIYA_V10::${groupName.trim().toLowerCase()}::${password.trim()}`;
             if (window.crypto && window.crypto.subtle) {
                 const msgUint8 = new TextEncoder().encode(combined);
                 const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
@@ -222,8 +224,6 @@
         const BROKER_URL = 'wss://broker.emqx.io:8084/mqtt';
         let mqttClient = null;
         let myStream = null;
-        let mediaRecorder = null;
-        let audioChunks = [];
         let myName = "";
         let displayGroupName = "";
         let topicBase = "";
@@ -233,18 +233,32 @@
         let wakeLock = null;
         let keepAliveAudioEl = null;
         let isExplicitlyLeaving = false;
-        let audioQueue = [];
-        let isPlayingQueue = false;
+        let reconnectWatchdog = null;
 
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let audioCtx = null;
+        let pcmBuffers = [];
+        let scriptNode = null;
+        let micSource = null;
+        let playQueue = [];
+        let isPlaying = false;
+
+        function ensureAudioCtx() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume().catch(() => {});
+            }
+        }
+
         function playBeep(freq, duration) {
             try {
-                if (audioCtx.state === 'suspended') audioCtx.resume();
+                ensureAudioCtx();
                 const osc = audioCtx.createOscillator();
                 const gain = audioCtx.createGain();
                 osc.type = 'sine';
                 osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-                gain.gain.setValueAtTime(0.14, audioCtx.currentTime);
+                gain.gain.setValueAtTime(0.16, audioCtx.currentTime);
                 osc.connect(gain);
                 gain.connect(audioCtx.destination);
                 osc.start();
@@ -252,9 +266,89 @@
             } catch (e) {}
         }
 
+        // Ovozni 8000Hz 8-bit ga siqish (5 soniya ovoz = atigi ~20 KB, 0.2 soniyada yetib boradi!)
+        function downsampleAndEncode8Bit(chunks, inputSampleRate) {
+            const targetRate = 8000;
+            const ratio = inputSampleRate / targetRate;
+            let totalInputLen = 0;
+            for (let i = 0; i < chunks.length; i++) totalInputLen += chunks[i].length;
+
+            const merged = new Float32Array(totalInputLen);
+            let pos = 0;
+            for (let i = 0; i < chunks.length; i++) {
+                merged.set(chunks[i], pos);
+                pos += chunks[i].length;
+            }
+
+            const outLen = Math.floor(totalInputLen / ratio);
+            const uint8 = new Uint8Array(outLen);
+            for (let i = 0; i < outLen; i++) {
+                const idx = Math.floor(i * ratio);
+                const s = Math.max(-1, Math.min(1, merged[idx] || 0));
+                uint8[i] = Math.round((s + 1) * 127.5);
+            }
+
+            let binary = '';
+            const step = 8192;
+            for (let i = 0; i < uint8.length; i += step) {
+                binary += String.fromCharCode.apply(null, uint8.subarray(i, i + step));
+            }
+            return btoa(binary);
+        }
+
+        function play8BitBase64(base64Str, onEnded) {
+            try {
+                ensureAudioCtx();
+                const binary = atob(base64Str);
+                const len = binary.length;
+                const float32 = new Float32Array(len);
+                for (let i = 0; i < len; i++) {
+                    float32[i] = (binary.charCodeAt(i) - 127.5) / 127.5;
+                }
+
+                const audioBuffer = audioCtx.createBuffer(1, len, 8000);
+                audioBuffer.getChannelData(0).set(float32);
+
+                const source = audioCtx.createBufferSource();
+                source.buffer = audioBuffer;
+
+                const gainNode = audioCtx.createGain();
+                gainNode.gain.value = 1.8;
+
+                source.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                source.onended = onEnded;
+                source.start();
+            } catch (e) {
+                if (onEnded) onEnded();
+            }
+        }
+
+        function enqueueVoice(senderName, pcmBase64) {
+            playQueue.push({ senderName, pcmBase64 });
+            if (!isPlaying) processPlayQueue();
+        }
+
+        function processPlayQueue() {
+            if (playQueue.length === 0) {
+                isPlaying = false;
+                if (!channelLockedBy) setFreeUI();
+                return;
+            }
+            isPlaying = true;
+            const item = playQueue.shift();
+            playBeep(700, 0.06);
+            document.getElementById('channel-status').innerText = `🔊 ${item.senderName} gapirdi`;
+
+            play8BitBase64(item.pcmBase64, () => {
+                playBeep(420, 0.06);
+                processPlayQueue();
+            });
+        }
+
         function enableStrongBackgroundMode() {
             try {
-                if (audioCtx.state === 'suspended') audioCtx.resume();
+                ensureAudioCtx();
                 const dest = audioCtx.createMediaStreamDestination();
                 const osc = audioCtx.createOscillator();
                 const gain = audioCtx.createGain();
@@ -275,9 +369,9 @@
 
                 if ('mediaSession' in navigator) {
                     navigator.mediaSession.metadata = new MediaMetadata({
-                        title: '📻 Ratsiya: ' + displayGroupName,
-                        artist: 'Zello ovoz kanali faol',
-                        album: 'Ratsiya Pro'
+                        title: '📻 Mukamal Ratsya: ' + displayGroupName,
+                        artist: 'Efir faol (Orqa fon)',
+                        album: 'Ratsiya'
                     });
                     navigator.mediaSession.playbackState = 'playing';
                 }
@@ -290,7 +384,7 @@
 
         document.addEventListener('visibilitychange', () => {
             if (document.getElementById('radio-screen').style.display === 'flex') {
-                if (audioCtx.state === 'suspended') audioCtx.resume();
+                ensureAudioCtx();
                 if (keepAliveAudioEl && keepAliveAudioEl.paused) keepAliveAudioEl.play().catch(() => {});
                 if (document.visibilityState === 'visible') {
                     if (!wakeLock && 'wakeLock' in navigator) {
@@ -319,13 +413,37 @@
             localStorage.setItem(ACTIVE_SESSION_KEY, "true");
 
             const hash = await generateIsolatedChannelHash(rawGroup, rawPass);
-            topicBase = `uz_ratsiya_pro_v8/room_${hash}`;
+            topicBase = `uz_ratsiya_pro_v10/room_${hash}`;
 
             try {
+                ensureAudioCtx();
                 myStream = await navigator.mediaDevices.getUserMedia({
                     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
                     video: false
                 });
+
+                micSource = audioCtx.createMediaStreamSource(myStream);
+                scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+                
+                // O'z ovozimiz o'zimizga aks-sado bo'lib qaytmasligi uchun jim chiqish (ZeroGain)
+                const silentOut = audioCtx.createGain();
+                silentOut.gain.value = 0;
+
+                scriptNode.onaudioprocess = (e) => {
+                    if (!isTalking) return;
+                    const input = e.inputBuffer.getChannelData(0);
+                    pcmBuffers.push(new Float32Array(input));
+
+                    // Mikrofon darajasini ekranda ko'rsatish
+                    let sum = 0;
+                    for (let i = 0; i < input.length; i += 16) sum += Math.abs(input[i]);
+                    const level = Math.min(100, Math.round((sum / (input.length / 16)) * 500));
+                    document.getElementById('mic-meter').style.width = level + '%';
+                };
+
+                micSource.connect(scriptNode);
+                scriptNode.connect(silentOut);
+                silentOut.connect(audioCtx.destination);
             } catch (err) {
                 if (!isAutoResume) {
                     alert("Mikrofonga ruxsat berilmadi! Ilova sozlamalaridan mikrofonni yoqing.");
@@ -344,6 +462,7 @@
 
         function connectBroker() {
             if (isExplicitlyLeaving) return;
+            clearTimeout(reconnectWatchdog);
             if (mqttClient) {
                 try { mqttClient.end(true); } catch (e) {}
             }
@@ -351,27 +470,32 @@
             updateStatus(false, "Ulanmoqda...");
 
             mqttClient = mqtt.connect(BROKER_URL, {
-                clientId: 'uzr8_' + myId + '_' + Math.random().toString(36).substring(2, 6),
-                keepalive: 60,
+                clientId: 'uzr10_' + myId + '_' + Math.random().toString(36).substring(2, 6),
+                keepalive: 45,
                 reconnectPeriod: 2000,
-                connectTimeout: 10000,
-                clean: false
+                connectTimeout: 8000,
+                clean: true
             });
 
+            // Agar 9 soniyada ulanmasa, majburan qayta ulash (qotib qolishni yo'qotadi)
+            reconnectWatchdog = setTimeout(() => {
+                if (!mqttClient || !mqttClient.connected) {
+                    connectBroker();
+                }
+            }, 9000);
+
             mqttClient.on('connect', () => {
+                clearTimeout(reconnectWatchdog);
                 updateStatus(true, "Aloqada");
                 activeUsers[myId] = myName + " (Siz)";
                 renderUsers();
 
-                // 1. Barcha guruh a'zolarini saqlovchi retained ro'yxatga obuna bo'lish
                 mqttClient.subscribe(`${topicBase}/members/+`, { qos: 1 });
-                // 2. Jonli ovoz paketlari kanaliga QoS 1 bilan obuna bo'lish (uxlab qolsa ham yetib boradi)
                 mqttClient.subscribe(`${topicBase}/voice`, { qos: 1 });
 
-                // O'zimizni server xotirasiga (retain: true) muhrlab qo'yamiz — ilova yopilsa ham o'chmaymiz
                 mqttClient.publish(
                     `${topicBase}/members/${myId}`,
-                    JSON.stringify({ id: myId, name: myName, joinedAt: Date.now() }),
+                    JSON.stringify({ id: myId, name: myName }),
                     { qos: 1, retain: true }
                 );
             });
@@ -379,28 +503,21 @@
             mqttClient.on('message', (topic, payload) => {
                 const rawStr = payload.toString();
 
-                // A'zolar ro'yxati (Retained)
                 if (topic.startsWith(`${topicBase}/members/`)) {
                     const memberId = topic.split('/').pop();
                     if (!rawStr) {
-                        // Bo'sh xabar kelsa — demak foydalanuvchi o'zi "Chiqish" bosgan
                         delete activeUsers[memberId];
                         renderUsers();
                         return;
                     }
                     try {
                         const info = JSON.parse(rawStr);
-                        if (info.id === myId) {
-                            activeUsers[myId] = myName + " (Siz)";
-                        } else {
-                            activeUsers[info.id] = info.name;
-                        }
+                        activeUsers[info.id] = (info.id === myId) ? (myName + " (Siz)") : info.name;
                         renderUsers();
                     } catch (e) {}
                     return;
                 }
 
-                // Ovoz xabarlari va holatlar
                 if (topic === `${topicBase}/voice`) {
                     let msg;
                     try { msg = JSON.parse(rawStr); } catch (e) { return; }
@@ -410,16 +527,16 @@
                         activeUsers[msg.from] = msg.name;
                         channelLockedBy = msg.from;
                         setBusyUI(msg.name);
-                        playBeep(650, 0.08);
+                        playBeep(650, 0.06);
                     } else if (msg.type === 'PTT_STOP') {
                         if (channelLockedBy === msg.from) {
                             channelLockedBy = null;
-                            setFreeUI();
+                            if (!isPlaying) setFreeUI();
                         }
-                    } else if (msg.type === 'VOICE_BURST') {
+                    } else if (msg.type === 'VOICE8') {
                         activeUsers[msg.from] = msg.name;
                         renderUsers();
-                        enqueueVoiceAndPlay(msg.name, msg.audio, msg.mime);
+                        enqueueVoice(msg.name, msg.d);
                     }
                 }
             });
@@ -427,41 +544,10 @@
             mqttClient.on('offline', () => {
                 if (!isExplicitlyLeaving) updateStatus(false, "Qayta ulanmoqda...");
             });
-        }
 
-        function enqueueVoiceAndPlay(senderName, base64Audio, mimeType) {
-            audioQueue.push({ senderName, base64Audio, mimeType });
-            if (!isPlayingQueue) {
-                playNextInQueue();
-            }
-        }
-
-        function playNextInQueue() {
-            if (audioQueue.length === 0) {
-                isPlayingQueue = false;
-                if (!channelLockedBy) setFreeUI();
-                return;
-            }
-
-            isPlayingQueue = true;
-            const item = audioQueue.shift();
-
-            try {
-                if (audioCtx.state === 'suspended') audioCtx.resume();
-                playBeep(700, 0.07);
-                document.getElementById('channel-status').innerText = `🔊 ${item.senderName} gapirdi`;
-
-                const audio = new Audio(`data:${item.mimeType || 'audio/webm'};base64,${item.base64Audio}`);
-                audio.volume = 1.0;
-                audio.onended = () => {
-                    playBeep(420, 0.07);
-                    playNextInQueue();
-                };
-                audio.onerror = () => playNextInQueue();
-                audio.play().catch(() => playNextInQueue());
-            } catch (e) {
-                playNextInQueue();
-            }
+            mqttClient.on('error', () => {
+                if (!isExplicitlyLeaving) updateStatus(false, "Tarmoq xatosi...");
+            });
         }
 
         const pttBtn = document.getElementById('ptt-btn');
@@ -471,56 +557,19 @@
             if (channelLockedBy && channelLockedBy !== myId) return;
             if (!myStream || isTalking) return;
 
+            ensureAudioCtx();
+            pcmBuffers = [];
             isTalking = true;
-            audioChunks = [];
             pttBtn.classList.add('talking');
             document.getElementById('ptt-label').innerText = "GAPIRMOQDASIZ...";
-            document.getElementById('channel-status').innerText = "Ovoz yozilmoqda...";
-            playBeep(750, 0.08);
+            document.getElementById('channel-status').innerText = "Efirdasiz (gapiring)...";
+            playBeep(750, 0.07);
 
             if (mqttClient && mqttClient.connected) {
                 mqttClient.publish(`${topicBase}/voice`, JSON.stringify({
                     type: 'PTT_START', from: myId, name: myName
                 }), { qos: 0 });
             }
-
-            try {
-                const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-                    ? 'audio/webm;codecs=opus'
-                    : (MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : '');
-
-                mediaRecorder = mimeType
-                    ? new MediaRecorder(myStream, { mimeType, audioBitsPerSecond: 16000 })
-                    : new MediaRecorder(myStream, { audioBitsPerSecond: 16000 });
-
-                mediaRecorder.ondataavailable = (event) => {
-                    if (event.data && event.data.size > 0) {
-                        audioChunks.push(event.data);
-                    }
-                };
-
-                mediaRecorder.onstop = () => {
-                    if (audioChunks.length === 0) return;
-                    const finalMime = mediaRecorder.mimeType || 'audio/webm';
-                    const blob = new Blob(audioChunks, { type: finalMime });
-                    const reader = new FileReader();
-                    reader.onloadend = () => {
-                        const base64Data = reader.result.split(',')[1];
-                        if (mqttClient && mqttClient.connected && base64Data) {
-                            mqttClient.publish(`${topicBase}/voice`, JSON.stringify({
-                                type: 'VOICE_BURST',
-                                from: myId,
-                                name: myName,
-                                mime: finalMime,
-                                audio: base64Data
-                            }), { qos: 1 });
-                        }
-                    };
-                    reader.readAsDataURL(blob);
-                };
-
-                mediaRecorder.start(250);
-            } catch (err) {}
 
             renderUsers();
         }
@@ -530,23 +579,34 @@
             if (!isTalking) return;
 
             isTalking = false;
+            document.getElementById('mic-meter').style.width = '0%';
             pttBtn.classList.remove('talking');
             document.getElementById('ptt-label').innerText = "BOSIB GAPIRING";
-            document.getElementById('channel-status').innerText = "Yuborildi ✓";
-            playBeep(450, 0.08);
-
-            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-                try { mediaRecorder.stop(); } catch (err) {}
-            }
+            playBeep(450, 0.07);
 
             if (mqttClient && mqttClient.connected) {
                 mqttClient.publish(`${topicBase}/voice`, JSON.stringify({
                     type: 'PTT_STOP', from: myId
                 }), { qos: 0 });
+
+                if (pcmBuffers.length > 0) {
+                    const sr = (audioCtx && audioCtx.sampleRate) ? audioCtx.sampleRate : 48000;
+                    const encoded = downsampleAndEncode8Bit(pcmBuffers, sr);
+                    pcmBuffers = [];
+                    mqttClient.publish(`${topicBase}/voice`, JSON.stringify({
+                        type: 'VOICE8',
+                        from: myId,
+                        name: myName,
+                        d: encoded
+                    }), { qos: 1 });
+                    document.getElementById('channel-status').innerText = "Yuborildi ✓";
+                } else {
+                    document.getElementById('channel-status').innerText = "Kanal bo'sh";
+                }
             }
 
             setTimeout(() => {
-                if (!isTalking && !isPlayingQueue) {
+                if (!isTalking && !isPlaying) {
                     document.getElementById('channel-status').innerText = "Kanal bo'sh";
                 }
             }, 1500);
@@ -600,9 +660,9 @@
 
         function editSettings() {
             isExplicitlyLeaving = true;
+            clearTimeout(reconnectWatchdog);
             localStorage.removeItem(ACTIVE_SESSION_KEY);
             if (mqttClient && mqttClient.connected) {
-                // Server xotirasidan o'zimizni faqat shu tugma bosilganda o'chiramiz
                 mqttClient.publish(`${topicBase}/members/${myId}`, '', { qos: 1, retain: true });
             }
             setTimeout(() => {
@@ -620,6 +680,7 @@
 
         function leaveRadio() {
             isExplicitlyLeaving = true;
+            clearTimeout(reconnectWatchdog);
             localStorage.removeItem(ACTIVE_SESSION_KEY);
             if (mqttClient && mqttClient.connected) {
                 mqttClient.publish(`${topicBase}/members/${myId}`, '', { qos: 1, retain: true });
