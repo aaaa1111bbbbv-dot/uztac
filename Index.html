@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Ratsiya Pro - Guruh Aloqasi</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        * { box-sizing: border-box; user-select: none; -webkit-user-select: none; font-family: 'Segoe UI', Roboto, sans-serif; }
+        body { margin: 0; background: #121212; color: #fff; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        
+        /* Yaratuvchi kodi va Kirish oynalari */
+        .center-screen { display: none; flex-direction: column; justify-content: center; align-items: center; height: 100%; padding: 20px; background: #1a1a1a; overflow-y: auto; }
+        .card { background: #242424; padding: 22px; border-radius: 16px; width: 100%; max-width: 360px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
+        h2 { margin-top: 0; margin-bottom: 10px; text-align: center; color: #00e676; }
+        p.hint { text-align: center; color: #aaa; font-size: 13px; margin-bottom: 15px; }
+        label.field-label { display: block; font-size: 12px; color: #aaa; margin-top: 8px; margin-bottom: 4px; }
+        input { width: 100%; padding: 13px; margin-bottom: 6px; border-radius: 10px; border: 1px solid #444; background: #181818; color: #fff; font-size: 15px; outline: none; user-select: text; -webkit-user-select: text; }
+        input:focus { border-color: #00e676; }
+        button.primary-btn { width: 100%; padding: 14px; border: none; border-radius: 10px; background: #00e676; color: #000; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 12px; }
+        button.primary-btn:active { background: #00c853; }
+        button.secondary-btn { width: 100%; padding: 10px; border: 1px solid #444; border-radius: 10px; background: transparent; color: #bbb; font-size: 13px; cursor: pointer; margin-top: 8px; }
+        button.secondary-btn:active { background: #2e2e2e; }
+        .error-msg { color: #ff5252; font-size: 13px; text-align: center; margin-top: 8px; display: none; }
+        .saved-badge { font-size: 12px; color: #00e676; text-align: center; margin-bottom: 8px; display: none; }
+
+        /* Asosiy ratsiya oynasi */
+        #radio-screen { display: none; flex-direction: column; height: 100%; justify-content: space-between; padding: 15px; }
+        .header { display: flex; justify-content: space-between; align-items: center; background: #1f1f1f; padding: 12px 15px; border-radius: 12px; gap: 8px; }
+        .status-badge { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: bold; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; background: #ff5252; flex-shrink: 0; }
+        .dot.online { background: #00e676; box-shadow: 0 0 8px #00e676; }
+        .header-actions { display: flex; gap: 6px; }
+        .edit-btn { background: #2e2e2e; color: #00e676; border: 1px solid #00e676; padding: 7px 10px; border-radius: 8px; font-weight: bold; font-size: 12px; cursor: pointer; }
+        .leave-btn { background: #ff5252; color: white; border: none; padding: 7px 10px; border-radius: 8px; font-weight: bold; font-size: 12px; cursor: pointer; }
+
+        /* Ishtirokchilar ro'yxati */
+        .users-box { background: #1a1a1a; border-radius: 12px; padding: 12px; margin: 10px 0; flex-grow: 1; overflow-y: auto; border: 1px solid #2c2c2c; }
+        .users-title { font-size: 13px; color: #aaa; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+        .user-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; background: #252525; border-radius: 8px; margin-bottom: 6px; font-size: 14px; }
+        .speaking-tag { color: #00e676; font-weight: bold; font-size: 12px; display: none; }
+        .user-item.speaking { border: 1px solid #00e676; background: #1b3326; }
+        .user-item.speaking .speaking-tag { display: inline; }
+
+        /* Gapirish tugmasi (PTT) */
+        .ptt-container { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 15px 0; }
+        #ptt-btn {
+            width: 190px; height: 190px; border-radius: 50%;
+            background: radial-gradient(circle, #2e7d32 0%, #1b5e20 100%);
+            border: 6px solid #388e3c; color: white; font-size: 20px; font-weight: bold;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6); cursor: pointer; transition: transform 0.1s;
+            touch-action: none;
+        }
+        #ptt-btn.talking {
+            background: radial-gradient(circle, #d32f2f 0%, #b71c1c 100%);
+            border-color: #ff5252; transform: scale(0.95);
+            box-shadow: 0 0 35px rgba(255, 82, 82, 0.7);
+        }
+        #ptt-btn.busy {
+            background: #333; border-color: #555; color: #888; cursor: not-allowed;
+        }
+        #channel-status { margin-top: 12px; font-size: 15px; color: #bbb; font-weight: 500; text-align: center; height: 22px; }
+    </style>
+</head>
+<body>
+
+    <!-- 1. Bir martalik Yaratuvchi kodi oynasi -->
+    <div id="creator-screen" class="center-screen">
+        <div class="card">
+            <h2>🔐 Ilovani Faollashtirish</h2>
+            <p class="hint">Davom etish uchun yaratuvchi kodini kiriting (bir marta so'raladi)</p>
+            <input type="password" id="creator-code-input" placeholder="Yaratuvchi kodi...">
+            <button class="primary-btn" onclick="verifyCreatorCode()">TASDIQLASH</button>
+            <div id="code-error" class="error-msg">Noto'g'ri kod! Qaytadan urinib ko'ring.</div>
+        </div>
+    </div>
+
+    <!-- 2. Asosiy menyu (Ism, Guruh nomi va Guruh paroli) -->
+    <div id="login-screen" class="center-screen">
+        <div class="card">
+            <h2>📻 Ratsiya Pro</h2>
+            <div id="saved-indicator" class="saved-badge">✓ Saqlangan ma'lumotlar yuklandi (tahrirlash mumkin)</div>
+            
+            <label class="field-label" for="username">Ismingiz:</label>
+            <input type="text" id="username" placeholder="Masalan: Ali" maxlength="15">
+
+            <label class="field-label" for="group-name">Guruh nomi (bir xil bo'lishi shart):</label>
+            <input type="text" id="group-name" placeholder="Masalan: Qurilish 1" maxlength="25">
+            
+            <label class="field-label" for="room-code">Guruh maxfiy paroli:</label>
+            <input type="text" id="room-code" placeholder="Masalan: 7788" maxlength="25">
+            
+            <button class="primary-btn" onclick="startRadio()">ULANISH</button>
+            <button class="secondary-btn" onclick="clearSavedProfile()">Maydonlarni tozalash</button>
+        </div>
+    </div>
+
+    <!-- 3. Ratsiya aloqa oynasi -->
+    <div id="radio-screen">
+        <div class="header">
+            <div class="status-badge">
+                <div class="dot" id="conn-dot"></div>
+                <span id="conn-text">Ulanmoqda...</span>
+            </div>
+            <div style="font-size: 13px; color: #00e676; font-weight: bold; text-align: center;" id="room-display"></div>
+            <div class="header-actions">
+                <button class="edit-btn" onclick="editSettings()">✏️ Tahrirlash</button>
+                <button class="leave-btn" onclick="leaveRadio()">Chiqish</button>
+            </div>
+        </div>
+
+        <div class="users-box">
+            <div class="users-title">Tarmoqdagi ishtirokchilar (<span id="user-count">1</span>)</div>
+            <div id="users-list"></div>
+        </div>
+
+        <div class="ptt-container">
+            <button id="ptt-btn">
+                <span style="font-size: 36px; margin-bottom: 5px;">🎙️</span>
+                <span id="ptt-label">BOSIB GAPIRING</span>
+            </button>
+            <div id="channel-status">Kanal bo'sh</div>
+        </div>
+    </div>
+
+    <div id="audio-container" style="display:none;"></div>
+
+    <script>
+        const CREATOR_SECRET = "Alisa";
+        const STORAGE_KEY = "ratsiya_creator_verified_v1";
+        const PROFILE_NAME_KEY = "ratsiya_saved_username_v2";
+        const PROFILE_GROUP_KEY = "ratsiya_saved_groupname_v2";
+        const PROFILE_ROOM_KEY = "ratsiya_saved_roomcode_v2";
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const isVerified = localStorage.getItem(STORAGE_KEY);
+            loadSavedProfile();
+
+            if (isVerified === "true") {
+                document.getElementById('login-screen').style.display = 'flex';
+            } else {
+                document.getElementById('creator-screen').style.display = 'flex';
+            }
+        });
+
+        function loadSavedProfile() {
+            const savedName = localStorage.getItem(PROFILE_NAME_KEY);
+            const savedGroup = localStorage.getItem(PROFILE_GROUP_KEY);
+            const savedRoom = localStorage.getItem(PROFILE_ROOM_KEY);
+
+            if (savedName) document.getElementById('username').value = savedName;
+            if (savedGroup) document.getElementById('group-name').value = savedGroup;
+            if (savedRoom) document.getElementById('room-code').value = savedRoom;
+
+            if (savedName || savedGroup || savedRoom) {
+                document.getElementById('saved-indicator').style.display = 'block';
+            }
+        }
+
+        function clearSavedProfile() {
+            localStorage.removeItem(PROFILE_NAME_KEY);
+            localStorage.removeItem(PROFILE_GROUP_KEY);
+            localStorage.removeItem(PROFILE_ROOM_KEY);
+            document.getElementById('username').value = '';
+            document.getElementById('group-name').value = '';
+            document.getElementById('room-code').value = '';
+            document.getElementById('saved-indicator').style.display = 'none';
+        }
+
+        function verifyCreatorCode() {
+            const entered = document.getElementById('creator-code-input').value.trim();
+            const errorEl = document.getElementById('code-error');
+
+            if (entered === CREATOR_SECRET) {
+                localStorage.setItem(STORAGE_KEY, "true");
+                errorEl.style.display = 'none';
+                document.getElementById('creator-screen').style.display = 'none';
+                document.getElementById('login-screen').style.display = 'flex';
+            } else {
+                errorEl.style.display = 'block';
+                document.getElementById('creator-code-input').value = '';
+            }
+        }
+
+        document.getElementById('creator-code-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') verifyCreatorCode();
+        });
+
+        // Guruh nomi va parolini birlashtirib 100% noyob (to'qnashmaydigan) kanal kaliti yasash
+        async function generateIsolatedChannelHash(groupName, password) {
+            const combined = `UZ_RATSIYA_V2::${groupName.toLowerCase()}::${password}`;
+            if (window.crypto && window.crypto.subtle) {
+                const msgUint8 = new TextEncoder().encode(combined);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+            } else {
+                // Eski qurilmalar uchun zaxira xesh funksiyasi
+                let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+                for (let i = 0; i < combined.length; i++) {
+                    const ch = combined.charCodeAt(i);
+                    h1 = Math.imul(h1 ^ ch, 2654435761);
+                    h2 = Math.imul(h2 ^ ch, 1597334677);
+                }
+                h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+                h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+                return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
+            }
+        }
+
+        const MAX_SLOTS = 12;
+        let peer = null;
+        let myStream = null;
+        let myName = "";
+        let displayGroupName = "";
+        let channelHash = "";
+        let mySlot = -1;
+        let connections = {};
+        let calls = {};
+        let activeUsers = {};
+        let isTalking = false;
+        let channelLockedBy = null;
+        let wakeLock = null;
+        let reconnectTimer = null;
+
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playBeep(freq, duration) {
+            try {
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + duration);
+            } catch (e) {}
+        }
+
+        function enableBackgroundKeepAlive() {
+            const silentAudio = document.createElement('audio');
+            silentAudio.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+            silentAudio.loop = true;
+            silentAudio.volume = 0.01;
+            silentAudio.play().catch(() => {});
+
+            if ('mediaSession' in navigator) {
+                navigator.mediaSession.metadata = new MediaMetadata({
+                    title: 'Ratsiya: ' + displayGroupName,
+                    artist: 'Orqa fon rejimi faol',
+                });
+            }
+
+            if ('wakeLock' in navigator) {
+                navigator.wakeLock.request('screen').then(lock => { wakeLock = lock; }).catch(() => {});
+            }
+        }
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && !wakeLock && 'wakeLock' in navigator) {
+                navigator.wakeLock.request('screen').then(lock => { wakeLock = lock; }).catch(() => {});
+            }
+        });
+
+        async function startRadio() {
+            const rawName = document.getElementById('username').value.trim();
+            const rawGroup = document.getElementById('group-name').value.trim();
+            const rawPass = document.getElementById('room-code').value.trim();
+
+            if (!rawGroup) {
+                alert("Guruh nomini kiriting!");
+                return;
+            }
+            if (!rawPass) {
+                alert("Guruh maxfiy parolini kiriting!");
+                return;
+            }
+
+            myName = rawName || "Foydalanuvchi";
+            displayGroupName = rawGroup;
+
+            // Saqlash
+            localStorage.setItem(PROFILE_NAME_KEY, myName);
+            localStorage.setItem(PROFILE_GROUP_KEY, rawGroup);
+            localStorage.setItem(PROFILE_ROOM_KEY, rawPass);
+
+            // Har bir guruh+parol juftligi uchun noyob izolyatsiyalangan kalit yaratish
+            channelHash = await generateIsolatedChannelHash(rawGroup, rawPass);
+
+            try {
+                myStream = await navigator.mediaDevices.getUserMedia({
+                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+                    video: false
+                });
+                myStream.getAudioTracks()[0].enabled = false;
+            } catch (err) {
+                alert("Mikrofonga ruxsat berilmadi! Ilova sozlamalaridan mikrofonni yoqing.");
+                return;
+            }
+
+            document.getElementById('login-screen').style.display = 'none';
+            document.getElementById('radio-screen').style.display = 'flex';
+            document.getElementById('room-display').innerText = displayGroupName;
+
+            enableBackgroundKeepAlive();
+            claimSlotAndConnect(0);
+        }
+
+        function editSettings() {
+            if (reconnectTimer) {
+                clearInterval(reconnectTimer);
+                reconnectTimer = null;
+            }
+            if (peer) {
+                peer.destroy();
+                peer = null;
+            }
+            if (myStream) {
+                myStream.getTracks().forEach(t => t.stop());
+                myStream = null;
+            }
+            connections = {};
+            calls = {};
+            activeUsers = {};
+            channelLockedBy = null;
+            isTalking = false;
+            document.getElementById('audio-container').innerHTML = '';
+
+            loadSavedProfile();
+            document.getElementById('radio-screen').style.display = 'none';
+            document.getElementById('login-screen').style.display = 'flex';
+        }
+
+        function claimSlotAndConnect(slotIndex) {
+            if (slotIndex >= MAX_SLOTS) {
+                updateStatus(false, "Guruh to'lgan!");
+                return;
+            }
+
+            const candidateId = `uzr_${channelHash}_s${slotIndex}`;
+            const tempPeer = new Peer(candidateId, {
+                debug: 0,
+                config: {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' }
+                    ]
+                }
+            });
+
+            tempPeer.on('open', (id) => {
+                peer = tempPeer;
+                mySlot = slotIndex;
+                updateStatus(true, "Aloqada");
+                activeUsers[id] = myName + " (Siz)";
+                renderUsers();
+                setupPeerEvents();
+                discoverPeers();
+            });
+
+            tempPeer.on('error', (err) => {
+                if (err.type === 'unavailable-id') {
+                    tempPeer.destroy();
+                    claimSlotAndConnect(slotIndex + 1);
+                } else {
+                    updateStatus(false, "Qayta ulanmoqda...");
+                    setTimeout(() => {
+                        tempPeer.destroy();
+                        claimSlotAndConnect(0);
+                    }, 3000);
+                }
+            });
+        }
+
+        function setupPeerEvents() {
+            peer.on('connection', (conn) => {
+                handleDataConnection(conn);
+            });
+
+            peer.on('call', (call) => {
+                // Faqat o'zimizning kanal xeshiga ega qurilmadan kelgan ovozni qabul qilish
+                if (call.peer.startsWith(`uzr_${channelHash}_`)) {
+                    call.answer(myStream);
+                    handleMediaCall(call);
+                } else {
+                    call.close();
+                }
+            });
+
+            peer.on('disconnected', () => {
+                updateStatus(false, "Qayta ulanmoqda...");
+                if (!reconnectTimer) {
+                    reconnectTimer = setInterval(() => {
+                        if (peer && !peer.destroyed) {
+                            peer.reconnect();
+                        } else {
+                            clearInterval(reconnectTimer);
+                            reconnectTimer = null;
+                            claimSlotAndConnect(0);
+                        }
+                    }, 3000);
+                }
+            });
+        }
+
+        function discoverPeers() {
+            for (let i = 0; i < MAX_SLOTS; i++) {
+                if (i === mySlot) continue;
+                const targetId = `uzr_${channelHash}_s${i}`;
+                if (!connections[targetId]) {
+                    const conn = peer.connect(targetId, { reliable: true });
+                    handleDataConnection(conn);
+                }
+            }
+        }
+
+        function handleDataConnection(conn) {
+            // Begona kanaldan ulanishga urinish bo'lsa rad etish
+            if (!conn.peer.startsWith(`uzr_${channelHash}_`)) {
+                conn.close();
+                return;
+            }
+
+            conn.on('open', () => {
+                connections[conn.peer] = conn;
+                clearInterval(reconnectTimer);
+                reconnectTimer = null;
+                updateStatus(true, "Aloqada");
+
+                conn.send({ type: 'JOIN', name: myName, hash: channelHash });
+
+                if (!calls[conn.peer]) {
+                    const call = peer.call(conn.peer, myStream);
+                    handleMediaCall(call);
+                }
+            });
+
+            conn.on('data', (data) => {
+                if (data.type === 'JOIN') {
+                    // Ikki tomonlama xesh tekshiruvi
+                    if (data.hash !== channelHash) {
+                        conn.close();
+                        return;
+                    }
+                    activeUsers[conn.peer] = data.name;
+                    renderUsers();
+                } else if (data.type === 'PTT_START') {
+                    channelLockedBy = conn.peer;
+                    setBusyUI(data.name);
+                    playBeep(600, 0.08);
+                } else if (data.type === 'PTT_STOP') {
+                    if (channelLockedBy === conn.peer) {
+                        channelLockedBy = null;
+                        setFreeUI();
+                        playBeep(400, 0.08);
+                    }
+                }
+            });
+
+            conn.on('close', () => removePeer(conn.peer));
+            conn.on('error', () => removePeer(conn.peer));
+        }
+
+        function handleMediaCall(call) {
+            calls[call.peer] = call;
+            call.on('stream', (remoteStream) => {
+                let audioEl = document.getElementById('audio_' + call.peer);
+                if (!audioEl) {
+                    audioEl = document.createElement('audio');
+                    audioEl.id = 'audio_' + call.peer;
+                    audioEl.autoplay = true;
+                    audioEl.playsInline = true;
+                    document.getElementById('audio-container').appendChild(audioEl);
+                }
+                audioEl.srcObject = remoteStream;
+                audioEl.play().catch(() => {});
+            });
+
+            call.on('close', () => removePeer(call.peer));
+        }
+
+        function removePeer(peerId) {
+            delete connections[peerId];
+            delete calls[peerId];
+            delete activeUsers[peerId];
+            const audioEl = document.getElementById('audio_' + peerId);
+            if (audioEl) audioEl.remove();
+
+            if (channelLockedBy === peerId) {
+                channelLockedBy = null;
+                setFreeUI();
+            }
+            renderUsers();
+        }
+
+        setInterval(() => {
+            if (peer && peer.open) {
+                discoverPeers();
+            }
+        }, 5000);
+
+        const pttBtn = document.getElementById('ptt-btn');
+
+        function startTalking(e) {
+            e.preventDefault();
+            if (channelLockedBy && channelLockedBy !== peer.id) return;
+            if (!myStream || isTalking) return;
+
+            isTalking = true;
+            myStream.getAudioTracks()[0].enabled = true;
+            pttBtn.classList.add('talking');
+            document.getElementById('ptt-label').innerText = "GAPIRMOQDASIZ...";
+            document.getElementById('channel-status').innerText = "Efirdasiz";
+            playBeep(750, 0.08);
+
+            broadcast({ type: 'PTT_START', name: myName });
+            renderUsers();
+        }
+
+        function stopTalking(e) {
+            if (e) e.preventDefault();
+            if (!isTalking) return;
+
+            isTalking = false;
+            myStream.getAudioTracks()[0].enabled = false;
+            pttBtn.classList.remove('talking');
+            document.getElementById('ptt-label').innerText = "BOSIB GAPIRING";
+            document.getElementById('channel-status').innerText = "Kanal bo'sh";
+            playBeep(450, 0.08);
+
+            broadcast({ type: 'PTT_STOP' });
+            renderUsers();
+        }
+
+        pttBtn.addEventListener('touchstart', startTalking);
+        pttBtn.addEventListener('touchend', stopTalking);
+        pttBtn.addEventListener('touchcancel', stopTalking);
+        pttBtn.addEventListener('mousedown', startTalking);
+        pttBtn.addEventListener('mouseup', stopTalking);
+        pttBtn.addEventListener('mouseleave', stopTalking);
+
+        function broadcast(msg) {
+            Object.values(connections).forEach(conn => {
+                if (conn.open) conn.send(msg);
+            });
+        }
+
+        function setBusyUI(speakerName) {
+            pttBtn.classList.add('busy');
+            document.getElementById('ptt-label').innerText = "BAND";
+            document.getElementById('channel-status').innerText = `🔊 ${speakerName} gapirmoqda...`;
+            renderUsers();
+        }
+
+        function setFreeUI() {
+            pttBtn.classList.remove('busy');
+            document.getElementById('ptt-label').innerText = "BOSIB GAPIRING";
+            document.getElementById('channel-status').innerText = "Kanal bo'sh";
+            renderUsers();
+        }
+
+        function renderUsers() {
+            const list = document.getElementById('users-list');
+            list.innerHTML = '';
+            const ids = Object.keys(activeUsers);
+            document.getElementById('user-count').innerText = ids.length;
+
+            ids.forEach(id => {
+                const isSpeaker = (id === channelLockedBy) || (id === peer?.id && isTalking);
+                const div = document.createElement('div');
+                div.className = 'user-item' + (isSpeaker ? ' speaking' : '');
+                div.innerHTML = `<span>👤 ${activeUsers[id]}</span><span class="speaking-tag">🔊 GAPIRMOQDA</span>`;
+                list.appendChild(div);
+            });
+        }
+
+        function updateStatus(online, text) {
+            const dot = document.getElementById('conn-dot');
+            const label = document.getElementById('conn-text');
+            dot.className = online ? 'dot online' : 'dot';
+            label.innerText = text;
+        }
+
+        function leaveRadio() {
+            if (peer) peer.destroy();
+            if (myStream) myStream.getTracks().forEach(t => t.stop());
+            location.reload();
+        }
+    </script>
+</body>
+</html>
