@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Ratsiya Pro v6</title>
+    <title>Ratsiya Pro v7</title>
     <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
     <style>
         * { box-sizing: border-box; user-select: none; -webkit-user-select: none; font-family: 'Segoe UI', Roboto, sans-serif; }
@@ -36,7 +36,7 @@
         .users-box { background: #1a1a1a; border-radius: 12px; padding: 12px; margin: 10px 0; flex-grow: 1; overflow-y: auto; border: 1px solid #2c2c2c; }
         .users-title { font-size: 13px; color: #aaa; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
         .user-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #252525; border-radius: 8px; margin-bottom: 6px; font-size: 14px; }
-        .user-audio-state { font-size: 11px; color: #888; margin-left: 6px; }
+        .user-audio-state { font-size: 11px; color: #ffb74d; margin-left: 6px; }
         .user-audio-state.ready { color: #00e676; }
         .speaking-tag { color: #00e676; font-weight: bold; font-size: 12px; display: none; }
         .user-item.speaking { border: 1px solid #00e676; background: #1b3326; }
@@ -76,7 +76,7 @@
 
     <div id="login-screen" class="center-screen">
         <div class="card">
-            <h2>📻 Ratsiya Pro <span style="font-size:12px;color:#00e676;">v6</span></h2>
+            <h2>📻 Ratsiya Pro <span style="font-size:12px;color:#00e676;">v7</span></h2>
             <div id="saved-indicator" class="saved-badge">✓ Saqlangan ma'lumotlar yuklandi</div>
             
             <label class="field-label" for="username">Ismingiz:</label>
@@ -106,7 +106,7 @@
                     <button class="leave-btn" onclick="leaveRadio()">Chiqish</button>
                 </div>
             </div>
-            <div class="bg-banner">🛡️ Orqa fon himoyasi faol — ekran o'chsa ham ovoz eshitiladi</div>
+            <div class="bg-banner">🛡️ Doimiy ulanish faol — "Chiqish" bosilmaguncha guruhda qolasiz</div>
         </div>
 
         <div class="users-box">
@@ -131,6 +131,7 @@
         const PROFILE_NAME_KEY = "ratsiya_saved_username_v2";
         const PROFILE_GROUP_KEY = "ratsiya_saved_groupname_v2";
         const PROFILE_ROOM_KEY = "ratsiya_saved_roomcode_v2";
+        const ACTIVE_SESSION_KEY = "ratsiya_stay_connected_v7";
         const CLIENT_ID_KEY = "ratsiya_persistent_client_id_v1";
 
         let myId = localStorage.getItem(CLIENT_ID_KEY);
@@ -143,10 +144,20 @@
             const isVerified = localStorage.getItem(STORAGE_KEY);
             loadSavedProfile();
 
-            if (isVerified === "true") {
-                document.getElementById('login-screen').style.display = 'flex';
-            } else {
+            if (isVerified !== "true") {
                 document.getElementById('creator-screen').style.display = 'flex';
+                return;
+            }
+
+            // Agar foydalanuvchi oldin "Chiqish" bosmagan bo'lsa, avtomatik guruhga qayta ulash
+            const stayConnected = localStorage.getItem(ACTIVE_SESSION_KEY);
+            const savedGroup = localStorage.getItem(PROFILE_GROUP_KEY);
+            const savedRoom = localStorage.getItem(PROFILE_ROOM_KEY);
+
+            if (stayConnected === "true" && savedGroup && savedRoom) {
+                startRadio(true);
+            } else {
+                document.getElementById('login-screen').style.display = 'flex';
             }
         });
 
@@ -168,6 +179,7 @@
             localStorage.removeItem(PROFILE_NAME_KEY);
             localStorage.removeItem(PROFILE_GROUP_KEY);
             localStorage.removeItem(PROFILE_ROOM_KEY);
+            localStorage.removeItem(ACTIVE_SESSION_KEY);
             document.getElementById('username').value = '';
             document.getElementById('group-name').value = '';
             document.getElementById('room-code').value = '';
@@ -211,10 +223,8 @@
             }
         }
 
-        // Barcha qurilmalar har doim aynan shu yagona barqaror brokerga ulanadi
         const BROKER_URL = 'wss://broker.emqx.io:8084/mqtt';
 
-        // STUN + TURN serverlar (4G mobil tarmoqlar o'rtasida ham ovoz o'tishi uchun)
         const RTC_CONFIG = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -301,22 +311,42 @@
             } catch (e) {}
         }
 
+        // Ilovaga qaytilganda yoki ekran yoqilganda darhol aloqani tekshirish va ovoz kanalini tiklash
         document.addEventListener('visibilitychange', () => {
             if (document.getElementById('radio-screen').style.display === 'flex') {
                 if (audioCtx.state === 'suspended') audioCtx.resume();
                 if (keepAliveAudioEl && keepAliveAudioEl.paused) keepAliveAudioEl.play().catch(() => {});
+                
                 if (document.visibilityState === 'visible') {
                     if (!wakeLock && 'wakeLock' in navigator) {
                         navigator.wakeLock.request('screen').then(lock => { wakeLock = lock; }).catch(() => {});
                     }
-                    if (mqttClient && mqttClient.connected) {
+                    if (!mqttClient || !mqttClient.connected) {
+                        connectBroker();
+                    } else {
                         sendSignal({ type: 'HELLO', from: myId, name: myName });
+                        reconnectAllPeers();
                     }
                 }
             }
         });
 
-        async function startRadio() {
+        function reconnectAllPeers() {
+            Object.keys(activeUsers).forEach(uid => {
+                if (uid !== myId) {
+                    const pc = pcs[uid];
+                    if (!pc || pc.connectionState !== 'connected') {
+                        if (myId > uid) {
+                            createPeerConnection(uid, true);
+                        } else {
+                            sendSignal({ type: 'HELLO', from: myId, name: myName });
+                        }
+                    }
+                }
+            });
+        }
+
+        async function startRadio(isAutoResume = false) {
             const rawName = document.getElementById('username').value.trim();
             const rawGroup = document.getElementById('group-name').value.trim();
             const rawPass = document.getElementById('room-code').value.trim();
@@ -331,6 +361,7 @@
             localStorage.setItem(PROFILE_NAME_KEY, myName);
             localStorage.setItem(PROFILE_GROUP_KEY, rawGroup);
             localStorage.setItem(PROFILE_ROOM_KEY, rawPass);
+            localStorage.setItem(ACTIVE_SESSION_KEY, "true");
 
             const hash = await generateIsolatedChannelHash(rawGroup, rawPass);
             topicBase = `uz_ratsiya_pro_v6/room_${hash}`;
@@ -342,7 +373,10 @@
                 });
                 myStream.getAudioTracks()[0].enabled = false;
             } catch (err) {
-                alert("Mikrofonga ruxsat berilmadi! Ilova sozlamalaridan mikrofonni yoqing.");
+                if (!isAutoResume) {
+                    alert("Mikrofonga ruxsat berilmadi! Ilova sozlamalaridan mikrofonni yoqing.");
+                }
+                document.getElementById('login-screen').style.display = 'flex';
                 return;
             }
 
@@ -362,18 +396,13 @@
 
             updateStatus(false, "Ulanmoqda...");
 
+            // DIQQAT: 'will' (avtomatik BYE) olib tashlandi — ilova yopilsa ham ro'yxatdan o'chirilmaydi
             mqttClient = mqtt.connect(BROKER_URL, {
-                clientId: 'uzr6_' + myId + '_' + Math.random().toString(36).substring(2, 6),
+                clientId: 'uzr7_' + myId + '_' + Math.random().toString(36).substring(2, 6),
                 keepalive: 45,
                 reconnectPeriod: 2000,
                 connectTimeout: 10000,
-                clean: true,
-                will: {
-                    topic: `${topicBase}/signal`,
-                    payload: JSON.stringify({ type: 'BYE', from: myId }),
-                    qos: 0,
-                    retain: false
-                }
+                clean: true
             });
 
             mqttClient.on('connect', () => {
@@ -383,6 +412,7 @@
 
                 mqttClient.subscribe(`${topicBase}/signal`, { qos: 0 }, () => {
                     sendSignal({ type: 'HELLO', from: myId, name: myName });
+                    reconnectAllPeers();
                 });
 
                 clearInterval(heartbeatTimer);
@@ -390,7 +420,7 @@
                     if (mqttClient && mqttClient.connected) {
                         sendSignal({ type: 'PING', from: myId, name: myName });
                     }
-                }, 6000);
+                }, 5000);
             });
 
             mqttClient.on('message', async (topic, payload) => {
@@ -408,9 +438,8 @@
                         sendSignal({ type: 'WELCOME', from: myId, to: msg.from, name: myName });
                     }
 
-                    // Faqat ID si katta bo'lgan qurilma ulanishni boshlaydi (to'qnashuv bo'lmasligi uchun)
                     const pc = pcs[msg.from];
-                    const needCall = !pc || pc.connectionState === 'failed' || pc.connectionState === 'closed';
+                    const needCall = !pc || pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected';
                     if (needCall && myId > msg.from) {
                         await createPeerConnection(msg.from, true);
                     }
@@ -453,6 +482,7 @@
                         playBeep(400, 0.08);
                     }
                 } else if (msg.type === 'BYE') {
+                    // Faqat foydalanuvchi o'zi "Chiqish" yoki "Tahrirlash" tugmasini bosganda o'chiriladi
                     removePeer(msg.from);
                 }
             });
@@ -515,7 +545,7 @@
                         if (!isExplicitlyLeaving && activeUsers[remoteId] && myId > remoteId) {
                             createPeerConnection(remoteId, true);
                         }
-                    }, 2500);
+                    }, 2000);
                 }
             };
 
@@ -619,7 +649,7 @@
                 if (id !== myId) {
                     audioBadge = peerAudioReady[id]
                         ? '<span class="user-audio-state ready">● Ovoz tayyor</span>'
-                        : '<span class="user-audio-state">○ Ulanmoqda...</span>';
+                        : '<span class="user-audio-state">○ Kutish rejimi</span>';
                 }
                 const div = document.createElement('div');
                 div.className = 'user-item' + (isSpeaker ? ' speaking' : '');
@@ -637,6 +667,7 @@
 
         function editSettings() {
             isExplicitlyLeaving = true;
+            localStorage.removeItem(ACTIVE_SESSION_KEY);
             sendSignal({ type: 'BYE', from: myId });
             clearInterval(heartbeatTimer);
             setTimeout(() => {
@@ -658,6 +689,7 @@
 
         function leaveRadio() {
             isExplicitlyLeaving = true;
+            localStorage.removeItem(ACTIVE_SESSION_KEY);
             sendSignal({ type: 'BYE', from: myId });
             setTimeout(() => location.reload(), 200);
         }
