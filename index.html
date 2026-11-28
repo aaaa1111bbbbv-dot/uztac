@@ -4,12 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Ratsiya Pro - Guruh Aloqasi</title>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <style>
         * { box-sizing: border-box; user-select: none; -webkit-user-select: none; font-family: 'Segoe UI', Roboto, sans-serif; }
         body { margin: 0; background: #121212; color: #fff; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
         
-        /* Yaratuvchi kodi va Kirish oynalari */
         .center-screen { display: none; flex-direction: column; justify-content: center; align-items: center; height: 100%; padding: 20px; background: #1a1a1a; overflow-y: auto; }
         .card { background: #242424; padding: 22px; border-radius: 16px; width: 100%; max-width: 360px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
         h2 { margin-top: 0; margin-bottom: 10px; text-align: center; color: #00e676; }
@@ -24,7 +23,6 @@
         .error-msg { color: #ff5252; font-size: 13px; text-align: center; margin-top: 8px; display: none; }
         .saved-badge { font-size: 12px; color: #00e676; text-align: center; margin-bottom: 8px; display: none; }
 
-        /* Asosiy ratsiya oynasi */
         #radio-screen { display: none; flex-direction: column; height: 100%; justify-content: space-between; padding: 15px; }
         .header { display: flex; justify-content: space-between; align-items: center; background: #1f1f1f; padding: 12px 15px; border-radius: 12px; gap: 8px; }
         .status-badge { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: bold; }
@@ -34,7 +32,6 @@
         .edit-btn { background: #2e2e2e; color: #00e676; border: 1px solid #00e676; padding: 7px 10px; border-radius: 8px; font-weight: bold; font-size: 12px; cursor: pointer; }
         .leave-btn { background: #ff5252; color: white; border: none; padding: 7px 10px; border-radius: 8px; font-weight: bold; font-size: 12px; cursor: pointer; }
 
-        /* Ishtirokchilar ro'yxati */
         .users-box { background: #1a1a1a; border-radius: 12px; padding: 12px; margin: 10px 0; flex-grow: 1; overflow-y: auto; border: 1px solid #2c2c2c; }
         .users-title { font-size: 13px; color: #aaa; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
         .user-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; background: #252525; border-radius: 8px; margin-bottom: 6px; font-size: 14px; }
@@ -42,7 +39,6 @@
         .user-item.speaking { border: 1px solid #00e676; background: #1b3326; }
         .user-item.speaking .speaking-tag { display: inline; }
 
-        /* Gapirish tugmasi (PTT) */
         .ptt-container { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 15px 0; }
         #ptt-btn {
             width: 190px; height: 190px; border-radius: 50%;
@@ -65,7 +61,6 @@
 </head>
 <body>
 
-    <!-- 1. Bir martalik Yaratuvchi kodi oynasi -->
     <div id="creator-screen" class="center-screen">
         <div class="card">
             <h2>🔐 Ilovani Faollashtirish</h2>
@@ -76,7 +71,6 @@
         </div>
     </div>
 
-    <!-- 2. Asosiy menyu (Ism, Guruh nomi va Guruh paroli) -->
     <div id="login-screen" class="center-screen">
         <div class="card">
             <h2>📻 Ratsiya Pro</h2>
@@ -86,7 +80,7 @@
             <input type="text" id="username" placeholder="Masalan: Ali" maxlength="15">
 
             <label class="field-label" for="group-name">Guruh nomi (bir xil bo'lishi shart):</label>
-            <input type="text" id="group-name" placeholder="Masalan: Qurilish 1" maxlength="25">
+            <input type="text" id="group-name" placeholder="Masalan: Anorkafe1" maxlength="25">
             
             <label class="field-label" for="room-code">Guruh maxfiy paroli:</label>
             <input type="text" id="room-code" placeholder="Masalan: 7788" maxlength="25">
@@ -96,7 +90,6 @@
         </div>
     </div>
 
-    <!-- 3. Ratsiya aloqa oynasi -->
     <div id="radio-screen">
         <div class="header">
             <div class="status-badge">
@@ -187,29 +180,32 @@
             if (e.key === 'Enter') verifyCreatorCode();
         });
 
-        // Guruh nomi va parolini birlashtirib 100% noyob (to'qnashmaydigan) kanal kaliti yasash
         async function generateIsolatedChannelHash(groupName, password) {
-            const combined = `UZ_RATSIYA_V2::${groupName.toLowerCase()}::${password}`;
+            const combined = `UZ_RATSIYA_V3::${groupName.toLowerCase()}::${password}`;
             if (window.crypto && window.crypto.subtle) {
                 const msgUint8 = new TextEncoder().encode(combined);
                 const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
                 const hashArray = Array.from(new Uint8Array(hashBuffer));
-                return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+                return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 24);
             } else {
-                // Eski qurilmalar uchun zaxira xesh funksiyasi
                 let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
                 for (let i = 0; i < combined.length; i++) {
                     const ch = combined.charCodeAt(i);
                     h1 = Math.imul(h1 ^ ch, 2654435761);
                     h2 = Math.imul(h2 ^ ch, 1597334677);
                 }
-                h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-                h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
                 return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
             }
         }
 
-        const MAX_SLOTS = 12;
+        // Bir nechta signal serverlari ro'yxati (biri ishlamasa keyingisiga avtomatik o'tadi)
+        const SIGNAL_SERVERS = [
+            { host: '0.peerjs.com', port: 443, path: '/', secure: true },
+            { host: 'peerjs.92k.de', port: 443, path: '/', secure: true }
+        ];
+        let serverIndex = 0;
+
+        const MAX_SLOTS = 8;
         let peer = null;
         let myStream = null;
         let myName = "";
@@ -223,6 +219,7 @@
         let channelLockedBy = null;
         let wakeLock = null;
         let reconnectTimer = null;
+        let connectTimeout = null;
 
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         function playBeep(freq, duration) {
@@ -259,35 +256,21 @@
             }
         }
 
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible' && !wakeLock && 'wakeLock' in navigator) {
-                navigator.wakeLock.request('screen').then(lock => { wakeLock = lock; }).catch(() => {});
-            }
-        });
-
         async function startRadio() {
             const rawName = document.getElementById('username').value.trim();
             const rawGroup = document.getElementById('group-name').value.trim();
             const rawPass = document.getElementById('room-code').value.trim();
 
-            if (!rawGroup) {
-                alert("Guruh nomini kiriting!");
-                return;
-            }
-            if (!rawPass) {
-                alert("Guruh maxfiy parolini kiriting!");
-                return;
-            }
+            if (!rawGroup) { alert("Guruh nomini kiriting!"); return; }
+            if (!rawPass) { alert("Guruh maxfiy parolini kiriting!"); return; }
 
             myName = rawName || "Foydalanuvchi";
             displayGroupName = rawGroup;
 
-            // Saqlash
             localStorage.setItem(PROFILE_NAME_KEY, myName);
             localStorage.setItem(PROFILE_GROUP_KEY, rawGroup);
             localStorage.setItem(PROFILE_ROOM_KEY, rawPass);
 
-            // Har bir guruh+parol juftligi uchun noyob izolyatsiyalangan kalit yaratish
             channelHash = await generateIsolatedChannelHash(rawGroup, rawPass);
 
             try {
@@ -310,18 +293,11 @@
         }
 
         function editSettings() {
-            if (reconnectTimer) {
-                clearInterval(reconnectTimer);
-                reconnectTimer = null;
-            }
-            if (peer) {
-                peer.destroy();
-                peer = null;
-            }
-            if (myStream) {
-                myStream.getTracks().forEach(t => t.stop());
-                myStream = null;
-            }
+            clearTimeout(connectTimeout);
+            clearInterval(reconnectTimer);
+            reconnectTimer = null;
+            if (peer) { peer.destroy(); peer = null; }
+            if (myStream) { myStream.getTracks().forEach(t => t.stop()); myStream = null; }
             connections = {};
             calls = {};
             activeUsers = {};
@@ -340,18 +316,38 @@
                 return;
             }
 
+            clearTimeout(connectTimeout);
+            const srv = SIGNAL_SERVERS[serverIndex % SIGNAL_SERVERS.length];
             const candidateId = `uzr_${channelHash}_s${slotIndex}`;
+            
+            updateStatus(false, `Ulanmoqda (S${serverIndex + 1})...`);
+
             const tempPeer = new Peer(candidateId, {
+                host: srv.host,
+                port: srv.port,
+                path: srv.path,
+                secure: srv.secure,
                 debug: 0,
                 config: {
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' }
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun.cloudflare.com:3478' }
                     ]
                 }
             });
 
+            // Agar 7 soniyada ulanmasa, keyingi zaxira serverga o'tish
+            connectTimeout = setTimeout(() => {
+                if (!tempPeer.open) {
+                    tempPeer.destroy();
+                    serverIndex++;
+                    claimSlotAndConnect(0);
+                }
+            }, 7000);
+
             tempPeer.on('open', (id) => {
+                clearTimeout(connectTimeout);
                 peer = tempPeer;
                 mySlot = slotIndex;
                 updateStatus(true, "Aloqada");
@@ -362,26 +358,25 @@
             });
 
             tempPeer.on('error', (err) => {
+                clearTimeout(connectTimeout);
                 if (err.type === 'unavailable-id') {
                     tempPeer.destroy();
                     claimSlotAndConnect(slotIndex + 1);
+                } else if (err.type === 'peer-unavailable') {
+                    // Boshqa slot bo'sh bo'lsa bu normal holat, xato bermaymiz
                 } else {
-                    updateStatus(false, "Qayta ulanmoqda...");
-                    setTimeout(() => {
-                        tempPeer.destroy();
-                        claimSlotAndConnect(0);
-                    }, 3000);
+                    tempPeer.destroy();
+                    serverIndex++;
+                    updateStatus(false, "Server almashmoqda...");
+                    setTimeout(() => claimSlotAndConnect(0), 2000);
                 }
             });
         }
 
         function setupPeerEvents() {
-            peer.on('connection', (conn) => {
-                handleDataConnection(conn);
-            });
+            peer.on('connection', (conn) => handleDataConnection(conn));
 
             peer.on('call', (call) => {
-                // Faqat o'zimizning kanal xeshiga ega qurilmadan kelgan ovozni qabul qilish
                 if (call.peer.startsWith(`uzr_${channelHash}_`)) {
                     call.answer(myStream);
                     handleMediaCall(call);
@@ -401,12 +396,13 @@
                             reconnectTimer = null;
                             claimSlotAndConnect(0);
                         }
-                    }, 3000);
+                    }, 4000);
                 }
             });
         }
 
         function discoverPeers() {
+            if (!peer || !peer.open) return;
             for (let i = 0; i < MAX_SLOTS; i++) {
                 if (i === mySlot) continue;
                 const targetId = `uzr_${channelHash}_s${i}`;
@@ -418,7 +414,6 @@
         }
 
         function handleDataConnection(conn) {
-            // Begona kanaldan ulanishga urinish bo'lsa rad etish
             if (!conn.peer.startsWith(`uzr_${channelHash}_`)) {
                 conn.close();
                 return;
@@ -440,11 +435,7 @@
 
             conn.on('data', (data) => {
                 if (data.type === 'JOIN') {
-                    // Ikki tomonlama xesh tekshiruvi
-                    if (data.hash !== channelHash) {
-                        conn.close();
-                        return;
-                    }
+                    if (data.hash !== channelHash) { conn.close(); return; }
                     activeUsers[conn.peer] = data.name;
                     renderUsers();
                 } else if (data.type === 'PTT_START') {
@@ -478,7 +469,6 @@
                 audioEl.srcObject = remoteStream;
                 audioEl.play().catch(() => {});
             });
-
             call.on('close', () => removePeer(call.peer));
         }
 
@@ -497,16 +487,14 @@
         }
 
         setInterval(() => {
-            if (peer && peer.open) {
-                discoverPeers();
-            }
-        }, 5000);
+            if (peer && peer.open) discoverPeers();
+        }, 8000);
 
         const pttBtn = document.getElementById('ptt-btn');
 
         function startTalking(e) {
             e.preventDefault();
-            if (channelLockedBy && channelLockedBy !== peer.id) return;
+            if (channelLockedBy && channelLockedBy !== peer?.id) return;
             if (!myStream || isTalking) return;
 
             isTalking = true;
