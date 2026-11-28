@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Ratsiya Pro - Guruh Aloqasi</title>
-    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
         * { box-sizing: border-box; user-select: none; -webkit-user-select: none; font-family: 'Segoe UI', Roboto, sans-serif; }
         body { margin: 0; background: #121212; color: #fff; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
@@ -181,12 +181,12 @@
         });
 
         async function generateIsolatedChannelHash(groupName, password) {
-            const combined = `UZ_RATSIYA_V3::${groupName.toLowerCase()}::${password}`;
+            const combined = `UZ_RATSIYA_MQTT_V1::${groupName.toLowerCase()}::${password}`;
             if (window.crypto && window.crypto.subtle) {
                 const msgUint8 = new TextEncoder().encode(combined);
                 const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
                 const hashArray = Array.from(new Uint8Array(hashBuffer));
-                return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 24);
+                return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
             } else {
                 let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
                 for (let i = 0; i < combined.length; i++) {
@@ -198,28 +198,35 @@
             }
         }
 
-        // Bir nechta signal serverlari ro'yxati (biri ishlamasa keyingisiga avtomatik o'tadi)
-        const SIGNAL_SERVERS = [
-            { host: '0.peerjs.com', port: 443, path: '/', secure: true },
-            { host: 'peerjs.92k.de', port: 443, path: '/', secure: true }
+        // Ishonchli global WSS brokerlar (biri band bo'lsa ikkinchisiga o'tadi)
+        const BROKERS = [
+            'wss://broker.emqx.io:8084/mqtt',
+            'wss://broker.hivemq.com:8884/mqtt'
         ];
-        let serverIndex = 0;
+        let brokerIdx = 0;
 
-        const MAX_SLOTS = 8;
-        let peer = null;
+        const RTC_CONFIG = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun.cloudflare.com:3478' }
+            ]
+        };
+
+        let mqttClient = null;
         let myStream = null;
+        let myId = 'u_' + Math.random().toString(36).substring(2, 10);
         let myName = "";
         let displayGroupName = "";
-        let channelHash = "";
-        let mySlot = -1;
-        let connections = {};
-        let calls = {};
+        let topicBase = "";
+        let pcs = {};
+        let pendingCandidates = {};
         let activeUsers = {};
+        let userLastSeen = {};
         let isTalking = false;
         let channelLockedBy = null;
         let wakeLock = null;
-        let reconnectTimer = null;
-        let connectTimeout = null;
+        let heartbeatTimer = null;
 
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         function playBeep(freq, duration) {
@@ -271,7 +278,8 @@
             localStorage.setItem(PROFILE_GROUP_KEY, rawGroup);
             localStorage.setItem(PROFILE_ROOM_KEY, rawPass);
 
-            channelHash = await generateIsolatedChannelHash(rawGroup, rawPass);
+            const hash = await generateIsolatedChannelHash(rawGroup, rawPass);
+            topicBase = `uz_ratsiya_pro/room_${hash}`;
 
             try {
                 myStream = await navigator.mediaDevices.getUserMedia({
@@ -289,212 +297,204 @@
             document.getElementById('room-display').innerText = displayGroupName;
 
             enableBackgroundKeepAlive();
-            claimSlotAndConnect(0);
+            connectBroker();
         }
 
-        function editSettings() {
-            clearTimeout(connectTimeout);
-            clearInterval(reconnectTimer);
-            reconnectTimer = null;
-            if (peer) { peer.destroy(); peer = null; }
-            if (myStream) { myStream.getTracks().forEach(t => t.stop()); myStream = null; }
-            connections = {};
-            calls = {};
-            activeUsers = {};
-            channelLockedBy = null;
-            isTalking = false;
-            document.getElementById('audio-container').innerHTML = '';
-
-            loadSavedProfile();
-            document.getElementById('radio-screen').style.display = 'none';
-            document.getElementById('login-screen').style.display = 'flex';
-        }
-
-        function claimSlotAndConnect(slotIndex) {
-            if (slotIndex >= MAX_SLOTS) {
-                updateStatus(false, "Guruh to'lgan!");
-                return;
+        function connectBroker() {
+            if (mqttClient) {
+                try { mqttClient.end(true); } catch (e) {}
             }
 
-            clearTimeout(connectTimeout);
-            const srv = SIGNAL_SERVERS[serverIndex % SIGNAL_SERVERS.length];
-            const candidateId = `uzr_${channelHash}_s${slotIndex}`;
-            
-            updateStatus(false, `Ulanmoqda (S${serverIndex + 1})...`);
+            const brokerUrl = BROKERS[brokerIdx % BROKERS.length];
+            updateStatus(false, "Ulanmoqda...");
 
-            const tempPeer = new Peer(candidateId, {
-                host: srv.host,
-                port: srv.port,
-                path: srv.path,
-                secure: srv.secure,
-                debug: 0,
-                config: {
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun.cloudflare.com:3478' }
-                    ]
-                }
+            mqttClient = mqtt.connect(brokerUrl, {
+                clientId: 'uzr_' + myId + '_' + Date.now().toString(36),
+                keepalive: 25,
+                reconnectPeriod: 3000,
+                connectTimeout: 8000,
+                clean: true
             });
 
-            // Agar 7 soniyada ulanmasa, keyingi zaxira serverga o'tish
-            connectTimeout = setTimeout(() => {
-                if (!tempPeer.open) {
-                    tempPeer.destroy();
-                    serverIndex++;
-                    claimSlotAndConnect(0);
-                }
-            }, 7000);
-
-            tempPeer.on('open', (id) => {
-                clearTimeout(connectTimeout);
-                peer = tempPeer;
-                mySlot = slotIndex;
+            mqttClient.on('connect', () => {
                 updateStatus(true, "Aloqada");
-                activeUsers[id] = myName + " (Siz)";
+                activeUsers[myId] = myName + " (Siz)";
+                userLastSeen[myId] = Date.now();
                 renderUsers();
-                setupPeerEvents();
-                discoverPeers();
+
+                mqttClient.subscribe(`${topicBase}/signal`, { qos: 0 });
+                sendSignal({ type: 'HELLO', from: myId, name: myName });
+
+                clearInterval(heartbeatTimer);
+                heartbeatTimer = setInterval(() => {
+                    if (mqttClient && mqttClient.connected) {
+                        sendSignal({ type: 'PING', from: myId, name: myName });
+                    }
+                    cleanupOfflineUsers();
+                }, 4000);
             });
 
-            tempPeer.on('error', (err) => {
-                clearTimeout(connectTimeout);
-                if (err.type === 'unavailable-id') {
-                    tempPeer.destroy();
-                    claimSlotAndConnect(slotIndex + 1);
-                } else if (err.type === 'peer-unavailable') {
-                    // Boshqa slot bo'sh bo'lsa bu normal holat, xato bermaymiz
-                } else {
-                    tempPeer.destroy();
-                    serverIndex++;
-                    updateStatus(false, "Server almashmoqda...");
-                    setTimeout(() => claimSlotAndConnect(0), 2000);
-                }
-            });
-        }
+            mqttClient.on('message', async (topic, payload) => {
+                let msg;
+                try { msg = JSON.parse(payload.toString()); } catch (e) { return; }
+                if (!msg || msg.from === myId) return;
+                if (msg.to && msg.to !== myId) return;
 
-        function setupPeerEvents() {
-            peer.on('connection', (conn) => handleDataConnection(conn));
+                userLastSeen[msg.from] = Date.now();
 
-            peer.on('call', (call) => {
-                if (call.peer.startsWith(`uzr_${channelHash}_`)) {
-                    call.answer(myStream);
-                    handleMediaCall(call);
-                } else {
-                    call.close();
-                }
-            });
-
-            peer.on('disconnected', () => {
-                updateStatus(false, "Qayta ulanmoqda...");
-                if (!reconnectTimer) {
-                    reconnectTimer = setInterval(() => {
-                        if (peer && !peer.destroyed) {
-                            peer.reconnect();
-                        } else {
-                            clearInterval(reconnectTimer);
-                            reconnectTimer = null;
-                            claimSlotAndConnect(0);
-                        }
-                    }, 4000);
-                }
-            });
-        }
-
-        function discoverPeers() {
-            if (!peer || !peer.open) return;
-            for (let i = 0; i < MAX_SLOTS; i++) {
-                if (i === mySlot) continue;
-                const targetId = `uzr_${channelHash}_s${i}`;
-                if (!connections[targetId]) {
-                    const conn = peer.connect(targetId, { reliable: true });
-                    handleDataConnection(conn);
-                }
-            }
-        }
-
-        function handleDataConnection(conn) {
-            if (!conn.peer.startsWith(`uzr_${channelHash}_`)) {
-                conn.close();
-                return;
-            }
-
-            conn.on('open', () => {
-                connections[conn.peer] = conn;
-                clearInterval(reconnectTimer);
-                reconnectTimer = null;
-                updateStatus(true, "Aloqada");
-
-                conn.send({ type: 'JOIN', name: myName, hash: channelHash });
-
-                if (!calls[conn.peer]) {
-                    const call = peer.call(conn.peer, myStream);
-                    handleMediaCall(call);
-                }
-            });
-
-            conn.on('data', (data) => {
-                if (data.type === 'JOIN') {
-                    if (data.hash !== channelHash) { conn.close(); return; }
-                    activeUsers[conn.peer] = data.name;
+                if (msg.type === 'HELLO') {
+                    activeUsers[msg.from] = msg.name;
                     renderUsers();
-                } else if (data.type === 'PTT_START') {
-                    channelLockedBy = conn.peer;
-                    setBusyUI(data.name);
+                    sendSignal({ type: 'WELCOME', from: myId, to: msg.from, name: myName });
+                    await createPeerConnection(msg.from, true);
+                } else if (msg.type === 'WELCOME') {
+                    activeUsers[msg.from] = msg.name;
+                    renderUsers();
+                    if (!pcs[msg.from]) {
+                        await createPeerConnection(msg.from, false);
+                    }
+                } else if (msg.type === 'PING') {
+                    if (!activeUsers[msg.from]) {
+                        activeUsers[msg.from] = msg.name;
+                        renderUsers();
+                    }
+                    if (!pcs[msg.from] && myId > msg.from) {
+                        await createPeerConnection(msg.from, true);
+                    }
+                } else if (msg.type === 'OFFER') {
+                    const pc = await createPeerConnection(msg.from, false);
+                    await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+                    await flushCandidates(msg.from, pc);
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    sendSignal({ type: 'ANSWER', from: myId, to: msg.from, sdp: pc.localDescription });
+                } else if (msg.type === 'ANSWER') {
+                    const pc = pcs[msg.from];
+                    if (pc && pc.signalingState !== 'stable') {
+                        await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+                        await flushCandidates(msg.from, pc);
+                    }
+                } else if (msg.type === 'ICE') {
+                    const pc = pcs[msg.from];
+                    if (pc && pc.remoteDescription) {
+                        try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch (e) {}
+                    } else {
+                        if (!pendingCandidates[msg.from]) pendingCandidates[msg.from] = [];
+                        pendingCandidates[msg.from].push(msg.candidate);
+                    }
+                } else if (msg.type === 'PTT_START') {
+                    channelLockedBy = msg.from;
+                    setBusyUI(msg.name);
                     playBeep(600, 0.08);
-                } else if (data.type === 'PTT_STOP') {
-                    if (channelLockedBy === conn.peer) {
+                } else if (msg.type === 'PTT_STOP') {
+                    if (channelLockedBy === msg.from) {
                         channelLockedBy = null;
                         setFreeUI();
                         playBeep(400, 0.08);
                     }
+                } else if (msg.type === 'BYE') {
+                    removePeer(msg.from);
                 }
             });
 
-            conn.on('close', () => removePeer(conn.peer));
-            conn.on('error', () => removePeer(conn.peer));
+            mqttClient.on('offline', () => updateStatus(false, "Qayta ulanmoqda..."));
+            mqttClient.on('error', () => {
+                brokerIdx++;
+                updateStatus(false, "Ulanmoqda...");
+            });
         }
 
-        function handleMediaCall(call) {
-            calls[call.peer] = call;
-            call.on('stream', (remoteStream) => {
-                let audioEl = document.getElementById('audio_' + call.peer);
+        function sendSignal(data) {
+            if (mqttClient && mqttClient.connected) {
+                mqttClient.publish(`${topicBase}/signal`, JSON.stringify(data), { qos: 0 });
+            }
+        }
+
+        async function createPeerConnection(remoteId, isInitiator) {
+            if (pcs[remoteId]) {
+                try { pcs[remoteId].close(); } catch (e) {}
+            }
+
+            const pc = new RTCPeerConnection(RTC_CONFIG);
+            pcs[remoteId] = pc;
+
+            if (myStream) {
+                myStream.getTracks().forEach(track => pc.addTrack(track, myStream));
+            }
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    sendSignal({ type: 'ICE', from: myId, to: remoteId, candidate: event.candidate });
+                }
+            };
+
+            pc.ontrack = (event) => {
+                let audioEl = document.getElementById('audio_' + remoteId);
                 if (!audioEl) {
                     audioEl = document.createElement('audio');
-                    audioEl.id = 'audio_' + call.peer;
+                    audioEl.id = 'audio_' + remoteId;
                     audioEl.autoplay = true;
                     audioEl.playsInline = true;
                     document.getElementById('audio-container').appendChild(audioEl);
                 }
-                audioEl.srcObject = remoteStream;
+                audioEl.srcObject = event.streams[0];
                 audioEl.play().catch(() => {});
-            });
-            call.on('close', () => removePeer(call.peer));
+            };
+
+            pc.onconnectionstatechange = () => {
+                if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+                    delete pcs[remoteId];
+                }
+            };
+
+            if (isInitiator) {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                sendSignal({ type: 'OFFER', from: myId, to: remoteId, sdp: pc.localDescription });
+            }
+
+            return pc;
         }
 
-        function removePeer(peerId) {
-            delete connections[peerId];
-            delete calls[peerId];
-            delete activeUsers[peerId];
-            const audioEl = document.getElementById('audio_' + peerId);
+        async function flushCandidates(remoteId, pc) {
+            const list = pendingCandidates[remoteId] || [];
+            delete pendingCandidates[remoteId];
+            for (const c of list) {
+                try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (e) {}
+            }
+        }
+
+        function cleanupOfflineUsers() {
+            const now = Date.now();
+            Object.keys(userLastSeen).forEach(id => {
+                if (id !== myId && now - userLastSeen[id] > 12000) {
+                    removePeer(id);
+                }
+            });
+        }
+
+        function removePeer(remoteId) {
+            if (pcs[remoteId]) {
+                try { pcs[remoteId].close(); } catch (e) {}
+                delete pcs[remoteId];
+            }
+            delete activeUsers[remoteId];
+            delete userLastSeen[remoteId];
+            const audioEl = document.getElementById('audio_' + remoteId);
             if (audioEl) audioEl.remove();
 
-            if (channelLockedBy === peerId) {
+            if (channelLockedBy === remoteId) {
                 channelLockedBy = null;
                 setFreeUI();
             }
             renderUsers();
         }
 
-        setInterval(() => {
-            if (peer && peer.open) discoverPeers();
-        }, 8000);
-
         const pttBtn = document.getElementById('ptt-btn');
 
         function startTalking(e) {
             e.preventDefault();
-            if (channelLockedBy && channelLockedBy !== peer?.id) return;
+            if (channelLockedBy && channelLockedBy !== myId) return;
             if (!myStream || isTalking) return;
 
             isTalking = true;
@@ -504,7 +504,7 @@
             document.getElementById('channel-status').innerText = "Efirdasiz";
             playBeep(750, 0.08);
 
-            broadcast({ type: 'PTT_START', name: myName });
+            sendSignal({ type: 'PTT_START', from: myId, name: myName });
             renderUsers();
         }
 
@@ -519,7 +519,7 @@
             document.getElementById('channel-status').innerText = "Kanal bo'sh";
             playBeep(450, 0.08);
 
-            broadcast({ type: 'PTT_STOP' });
+            sendSignal({ type: 'PTT_STOP', from: myId });
             renderUsers();
         }
 
@@ -529,12 +529,6 @@
         pttBtn.addEventListener('mousedown', startTalking);
         pttBtn.addEventListener('mouseup', stopTalking);
         pttBtn.addEventListener('mouseleave', stopTalking);
-
-        function broadcast(msg) {
-            Object.values(connections).forEach(conn => {
-                if (conn.open) conn.send(msg);
-            });
-        }
 
         function setBusyUI(speakerName) {
             pttBtn.classList.add('busy');
@@ -557,7 +551,7 @@
             document.getElementById('user-count').innerText = ids.length;
 
             ids.forEach(id => {
-                const isSpeaker = (id === channelLockedBy) || (id === peer?.id && isTalking);
+                const isSpeaker = (id === channelLockedBy) || (id === myId && isTalking);
                 const div = document.createElement('div');
                 div.className = 'user-item' + (isSpeaker ? ' speaking' : '');
                 div.innerHTML = `<span>👤 ${activeUsers[id]}</span><span class="speaking-tag">🔊 GAPIRMOQDA</span>`;
@@ -572,10 +566,27 @@
             label.innerText = text;
         }
 
+        function editSettings() {
+            sendSignal({ type: 'BYE', from: myId });
+            clearInterval(heartbeatTimer);
+            if (mqttClient) { try { mqttClient.end(true); } catch (e) {} mqttClient = null; }
+            Object.values(pcs).forEach(pc => { try { pc.close(); } catch (e) {} });
+            pcs = {};
+            activeUsers = {};
+            userLastSeen = {};
+            channelLockedBy = null;
+            isTalking = false;
+            if (myStream) { myStream.getTracks().forEach(t => t.stop()); myStream = null; }
+            document.getElementById('audio-container').innerHTML = '';
+
+            loadSavedProfile();
+            document.getElementById('radio-screen').style.display = 'none';
+            document.getElementById('login-screen').style.display = 'flex';
+        }
+
         function leaveRadio() {
-            if (peer) peer.destroy();
-            if (myStream) myStream.getTracks().forEach(t => t.stop());
-            location.reload();
+            sendSignal({ type: 'BYE', from: myId });
+            setTimeout(() => location.reload(), 150);
         }
     </script>
 </body>
