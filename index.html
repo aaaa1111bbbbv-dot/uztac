@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Ratsiya Pro v7</title>
+    <title>Ratsiya Pro v8 - Zello Mode</title>
     <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
     <style>
         * { box-sizing: border-box; user-select: none; -webkit-user-select: none; font-family: 'Segoe UI', Roboto, sans-serif; }
@@ -36,8 +36,7 @@
         .users-box { background: #1a1a1a; border-radius: 12px; padding: 12px; margin: 10px 0; flex-grow: 1; overflow-y: auto; border: 1px solid #2c2c2c; }
         .users-title { font-size: 13px; color: #aaa; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
         .user-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #252525; border-radius: 8px; margin-bottom: 6px; font-size: 14px; }
-        .user-audio-state { font-size: 11px; color: #ffb74d; margin-left: 6px; }
-        .user-audio-state.ready { color: #00e676; }
+        .user-audio-state { font-size: 11px; color: #00e676; margin-left: 6px; }
         .speaking-tag { color: #00e676; font-weight: bold; font-size: 12px; display: none; }
         .user-item.speaking { border: 1px solid #00e676; background: #1b3326; }
         .user-item.speaking .speaking-tag { display: inline; }
@@ -76,7 +75,7 @@
 
     <div id="login-screen" class="center-screen">
         <div class="card">
-            <h2>📻 Ratsiya Pro <span style="font-size:12px;color:#00e676;">v7</span></h2>
+            <h2>📻 Ratsiya Pro <span style="font-size:12px;color:#00e676;">v8</span></h2>
             <div id="saved-indicator" class="saved-badge">✓ Saqlangan ma'lumotlar yuklandi</div>
             
             <label class="field-label" for="username">Ismingiz:</label>
@@ -106,11 +105,11 @@
                     <button class="leave-btn" onclick="leaveRadio()">Chiqish</button>
                 </div>
             </div>
-            <div class="bg-banner">🛡️ Doimiy ulanish faol — "Chiqish" bosilmaguncha guruhda qolasiz</div>
+            <div class="bg-banner">🛡️ Zello rejimi: Ekran o'chiq bo'lsa ham ovoz yetib boradi</div>
         </div>
 
         <div class="users-box">
-            <div class="users-title">Guruhdagi ishtirokchilar (<span id="user-count">1</span>)</div>
+            <div class="users-title">Guruh a'zolari (<span id="user-count">1</span>)</div>
             <div id="users-list"></div>
         </div>
 
@@ -123,15 +122,13 @@
         </div>
     </div>
 
-    <div id="audio-container" style="display:none;"></div>
-
     <script>
         const CREATOR_SECRET = "Alisa";
         const STORAGE_KEY = "ratsiya_creator_verified_v1";
         const PROFILE_NAME_KEY = "ratsiya_saved_username_v2";
         const PROFILE_GROUP_KEY = "ratsiya_saved_groupname_v2";
         const PROFILE_ROOM_KEY = "ratsiya_saved_roomcode_v2";
-        const ACTIVE_SESSION_KEY = "ratsiya_stay_connected_v7";
+        const ACTIVE_SESSION_KEY = "ratsiya_stay_connected_v8";
         const CLIENT_ID_KEY = "ratsiya_persistent_client_id_v1";
 
         let myId = localStorage.getItem(CLIENT_ID_KEY);
@@ -149,7 +146,6 @@
                 return;
             }
 
-            // Agar foydalanuvchi oldin "Chiqish" bosmagan bo'lsa, avtomatik guruhga qayta ulash
             const stayConnected = localStorage.getItem(ACTIVE_SESSION_KEY);
             const savedGroup = localStorage.getItem(PROFILE_GROUP_KEY);
             const savedRoom = localStorage.getItem(PROFILE_ROOM_KEY);
@@ -206,7 +202,7 @@
         });
 
         async function generateIsolatedChannelHash(groupName, password) {
-            const combined = `UZ_RATSIYA_V6::${groupName.trim().toLowerCase()}::${password.trim()}`;
+            const combined = `UZ_RATSIYA_V8::${groupName.trim().toLowerCase()}::${password.trim()}`;
             if (window.crypto && window.crypto.subtle) {
                 const msgUint8 = new TextEncoder().encode(combined);
                 const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
@@ -224,40 +220,21 @@
         }
 
         const BROKER_URL = 'wss://broker.emqx.io:8084/mqtt';
-
-        const RTC_CONFIG = {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun.relay.metered.ca:80' },
-                {
-                    urls: 'turn:global.relay.metered.ca:80',
-                    username: 'e8dd65b92f6dde43146a9f70',
-                    credential: '22vD+R/0l3B+4k9F'
-                },
-                {
-                    urls: 'turn:global.relay.metered.ca:443?transport=tcp',
-                    username: 'e8dd65b92f6dde43146a9f70',
-                    credential: '22vD+R/0l3B+4k9F'
-                }
-            ]
-        };
-
         let mqttClient = null;
         let myStream = null;
+        let mediaRecorder = null;
+        let audioChunks = [];
         let myName = "";
         let displayGroupName = "";
         let topicBase = "";
-        let pcs = {};
-        let peerAudioReady = {};
-        let pendingCandidates = {};
         let activeUsers = {};
         let isTalking = false;
         let channelLockedBy = null;
         let wakeLock = null;
-        let heartbeatTimer = null;
         let keepAliveAudioEl = null;
         let isExplicitlyLeaving = false;
+        let audioQueue = [];
+        let isPlayingQueue = false;
 
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         function playBeep(freq, duration) {
@@ -267,7 +244,7 @@
                 const gain = audioCtx.createGain();
                 osc.type = 'sine';
                 osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-                gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+                gain.gain.setValueAtTime(0.14, audioCtx.currentTime);
                 osc.connect(gain);
                 gain.connect(audioCtx.destination);
                 osc.start();
@@ -299,7 +276,7 @@
                 if ('mediaSession' in navigator) {
                     navigator.mediaSession.metadata = new MediaMetadata({
                         title: '📻 Ratsiya: ' + displayGroupName,
-                        artist: 'Efir tinglanmoqda (Orqa fon faol)',
+                        artist: 'Zello ovoz kanali faol',
                         album: 'Ratsiya Pro'
                     });
                     navigator.mediaSession.playbackState = 'playing';
@@ -311,40 +288,18 @@
             } catch (e) {}
         }
 
-        // Ilovaga qaytilganda yoki ekran yoqilganda darhol aloqani tekshirish va ovoz kanalini tiklash
         document.addEventListener('visibilitychange', () => {
             if (document.getElementById('radio-screen').style.display === 'flex') {
                 if (audioCtx.state === 'suspended') audioCtx.resume();
                 if (keepAliveAudioEl && keepAliveAudioEl.paused) keepAliveAudioEl.play().catch(() => {});
-                
                 if (document.visibilityState === 'visible') {
                     if (!wakeLock && 'wakeLock' in navigator) {
                         navigator.wakeLock.request('screen').then(lock => { wakeLock = lock; }).catch(() => {});
                     }
-                    if (!mqttClient || !mqttClient.connected) {
-                        connectBroker();
-                    } else {
-                        sendSignal({ type: 'HELLO', from: myId, name: myName });
-                        reconnectAllPeers();
-                    }
+                    if (!mqttClient || !mqttClient.connected) connectBroker();
                 }
             }
         });
-
-        function reconnectAllPeers() {
-            Object.keys(activeUsers).forEach(uid => {
-                if (uid !== myId) {
-                    const pc = pcs[uid];
-                    if (!pc || pc.connectionState !== 'connected') {
-                        if (myId > uid) {
-                            createPeerConnection(uid, true);
-                        } else {
-                            sendSignal({ type: 'HELLO', from: myId, name: myName });
-                        }
-                    }
-                }
-            });
-        }
 
         async function startRadio(isAutoResume = false) {
             const rawName = document.getElementById('username').value.trim();
@@ -364,14 +319,13 @@
             localStorage.setItem(ACTIVE_SESSION_KEY, "true");
 
             const hash = await generateIsolatedChannelHash(rawGroup, rawPass);
-            topicBase = `uz_ratsiya_pro_v6/room_${hash}`;
+            topicBase = `uz_ratsiya_pro_v8/room_${hash}`;
 
             try {
                 myStream = await navigator.mediaDevices.getUserMedia({
                     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
                     video: false
                 });
-                myStream.getAudioTracks()[0].enabled = false;
             } catch (err) {
                 if (!isAutoResume) {
                     alert("Mikrofonga ruxsat berilmadi! Ilova sozlamalaridan mikrofonni yoqing.");
@@ -396,13 +350,12 @@
 
             updateStatus(false, "Ulanmoqda...");
 
-            // DIQQAT: 'will' (avtomatik BYE) olib tashlandi — ilova yopilsa ham ro'yxatdan o'chirilmaydi
             mqttClient = mqtt.connect(BROKER_URL, {
-                clientId: 'uzr7_' + myId + '_' + Math.random().toString(36).substring(2, 6),
-                keepalive: 45,
+                clientId: 'uzr8_' + myId + '_' + Math.random().toString(36).substring(2, 6),
+                keepalive: 60,
                 reconnectPeriod: 2000,
                 connectTimeout: 10000,
-                clean: true
+                clean: false
             });
 
             mqttClient.on('connect', () => {
@@ -410,80 +363,64 @@
                 activeUsers[myId] = myName + " (Siz)";
                 renderUsers();
 
-                mqttClient.subscribe(`${topicBase}/signal`, { qos: 0 }, () => {
-                    sendSignal({ type: 'HELLO', from: myId, name: myName });
-                    reconnectAllPeers();
-                });
+                // 1. Barcha guruh a'zolarini saqlovchi retained ro'yxatga obuna bo'lish
+                mqttClient.subscribe(`${topicBase}/members/+`, { qos: 1 });
+                // 2. Jonli ovoz paketlari kanaliga QoS 1 bilan obuna bo'lish (uxlab qolsa ham yetib boradi)
+                mqttClient.subscribe(`${topicBase}/voice`, { qos: 1 });
 
-                clearInterval(heartbeatTimer);
-                heartbeatTimer = setInterval(() => {
-                    if (mqttClient && mqttClient.connected) {
-                        sendSignal({ type: 'PING', from: myId, name: myName });
-                    }
-                }, 5000);
+                // O'zimizni server xotirasiga (retain: true) muhrlab qo'yamiz — ilova yopilsa ham o'chmaymiz
+                mqttClient.publish(
+                    `${topicBase}/members/${myId}`,
+                    JSON.stringify({ id: myId, name: myName, joinedAt: Date.now() }),
+                    { qos: 1, retain: true }
+                );
             });
 
-            mqttClient.on('message', async (topic, payload) => {
-                let msg;
-                try { msg = JSON.parse(payload.toString()); } catch (e) { return; }
-                if (!msg || msg.from === myId) return;
-                if (msg.to && msg.to !== myId) return;
+            mqttClient.on('message', (topic, payload) => {
+                const rawStr = payload.toString();
 
-                if (msg.type === 'HELLO' || msg.type === 'WELCOME' || msg.type === 'PING') {
-                    const isNew = !activeUsers[msg.from];
-                    activeUsers[msg.from] = msg.name;
-                    if (isNew) renderUsers();
+                // A'zolar ro'yxati (Retained)
+                if (topic.startsWith(`${topicBase}/members/`)) {
+                    const memberId = topic.split('/').pop();
+                    if (!rawStr) {
+                        // Bo'sh xabar kelsa — demak foydalanuvchi o'zi "Chiqish" bosgan
+                        delete activeUsers[memberId];
+                        renderUsers();
+                        return;
+                    }
+                    try {
+                        const info = JSON.parse(rawStr);
+                        if (info.id === myId) {
+                            activeUsers[myId] = myName + " (Siz)";
+                        } else {
+                            activeUsers[info.id] = info.name;
+                        }
+                        renderUsers();
+                    } catch (e) {}
+                    return;
+                }
 
-                    if (msg.type === 'HELLO') {
-                        sendSignal({ type: 'WELCOME', from: myId, to: msg.from, name: myName });
-                    }
+                // Ovoz xabarlari va holatlar
+                if (topic === `${topicBase}/voice`) {
+                    let msg;
+                    try { msg = JSON.parse(rawStr); } catch (e) { return; }
+                    if (!msg || msg.from === myId) return;
 
-                    const pc = pcs[msg.from];
-                    const needCall = !pc || pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected';
-                    if (needCall && myId > msg.from) {
-                        await createPeerConnection(msg.from, true);
+                    if (msg.type === 'PTT_START') {
+                        activeUsers[msg.from] = msg.name;
+                        channelLockedBy = msg.from;
+                        setBusyUI(msg.name);
+                        playBeep(650, 0.08);
+                    } else if (msg.type === 'PTT_STOP') {
+                        if (channelLockedBy === msg.from) {
+                            channelLockedBy = null;
+                            setFreeUI();
+                        }
+                    } else if (msg.type === 'VOICE_BURST') {
+                        activeUsers[msg.from] = msg.name;
+                        renderUsers();
+                        enqueueVoiceAndPlay(msg.name, msg.audio, msg.mime);
                     }
-                } else if (msg.type === 'OFFER') {
-                    const pc = await createPeerConnection(msg.from, false);
-                    await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-                    await flushCandidates(msg.from, pc);
-                    const answer = await pc.createAnswer();
-                    await pc.setLocalDescription(answer);
-                    sendSignal({ type: 'ANSWER', from: myId, to: msg.from, sdp: pc.localDescription });
-                } else if (msg.type === 'ANSWER') {
-                    const pc = pcs[msg.from];
-                    if (pc && pc.signalingState === 'have-local-offer') {
-                        await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-                        await flushCandidates(msg.from, pc);
-                    }
-                } else if (msg.type === 'ICE') {
-                    const pc = pcs[msg.from];
-                    if (pc && pc.remoteDescription) {
-                        try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch (e) {}
-                    } else {
-                        if (!pendingCandidates[msg.from]) pendingCandidates[msg.from] = [];
-                        pendingCandidates[msg.from].push(msg.candidate);
-                    }
-                } else if (msg.type === 'PTT_START') {
-                    if (!activeUsers[msg.from]) activeUsers[msg.from] = msg.name;
-                    channelLockedBy = msg.from;
-                    setBusyUI(msg.name);
-                    playBeep(600, 0.08);
-                    const audioEl = document.getElementById('audio_' + msg.from);
-                    if (audioEl) {
-                        audioEl.muted = false;
-                        audioEl.volume = 1.0;
-                        audioEl.play().catch(() => {});
-                    }
-                } else if (msg.type === 'PTT_STOP') {
-                    if (channelLockedBy === msg.from) {
-                        channelLockedBy = null;
-                        setFreeUI();
-                        playBeep(400, 0.08);
-                    }
-                } else if (msg.type === 'BYE') {
-                    // Faqat foydalanuvchi o'zi "Chiqish" yoki "Tahrirlash" tugmasini bosganda o'chiriladi
-                    removePeer(msg.from);
                 }
             });
 
@@ -492,95 +429,39 @@
             });
         }
 
-        function sendSignal(data) {
-            if (mqttClient && mqttClient.connected) {
-                mqttClient.publish(`${topicBase}/signal`, JSON.stringify(data), { qos: 0 });
+        function enqueueVoiceAndPlay(senderName, base64Audio, mimeType) {
+            audioQueue.push({ senderName, base64Audio, mimeType });
+            if (!isPlayingQueue) {
+                playNextInQueue();
             }
         }
 
-        async function createPeerConnection(remoteId, isInitiator) {
-            if (pcs[remoteId]) {
-                try { pcs[remoteId].close(); } catch (e) {}
+        function playNextInQueue() {
+            if (audioQueue.length === 0) {
+                isPlayingQueue = false;
+                if (!channelLockedBy) setFreeUI();
+                return;
             }
 
-            const pc = new RTCPeerConnection(RTC_CONFIG);
-            pcs[remoteId] = pc;
-            peerAudioReady[remoteId] = false;
-            renderUsers();
+            isPlayingQueue = true;
+            const item = audioQueue.shift();
 
-            if (myStream) {
-                myStream.getTracks().forEach(track => pc.addTrack(track, myStream));
+            try {
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                playBeep(700, 0.07);
+                document.getElementById('channel-status').innerText = `🔊 ${item.senderName} gapirdi`;
+
+                const audio = new Audio(`data:${item.mimeType || 'audio/webm'};base64,${item.base64Audio}`);
+                audio.volume = 1.0;
+                audio.onended = () => {
+                    playBeep(420, 0.07);
+                    playNextInQueue();
+                };
+                audio.onerror = () => playNextInQueue();
+                audio.play().catch(() => playNextInQueue());
+            } catch (e) {
+                playNextInQueue();
             }
-
-            pc.onicecandidate = (event) => {
-                if (event.candidate) {
-                    sendSignal({ type: 'ICE', from: myId, to: remoteId, candidate: event.candidate });
-                }
-            };
-
-            pc.ontrack = (event) => {
-                let audioEl = document.getElementById('audio_' + remoteId);
-                if (!audioEl) {
-                    audioEl = document.createElement('audio');
-                    audioEl.id = 'audio_' + remoteId;
-                    audioEl.autoplay = true;
-                    audioEl.playsInline = true;
-                    document.getElementById('audio-container').appendChild(audioEl);
-                }
-                audioEl.srcObject = event.streams[0];
-                audioEl.volume = 1.0;
-                audioEl.play().catch(() => {});
-                peerAudioReady[remoteId] = true;
-                renderUsers();
-            };
-
-            pc.onconnectionstatechange = () => {
-                if (pc.connectionState === 'connected') {
-                    peerAudioReady[remoteId] = true;
-                    renderUsers();
-                } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-                    peerAudioReady[remoteId] = false;
-                    renderUsers();
-                    setTimeout(() => {
-                        if (!isExplicitlyLeaving && activeUsers[remoteId] && myId > remoteId) {
-                            createPeerConnection(remoteId, true);
-                        }
-                    }, 2000);
-                }
-            };
-
-            if (isInitiator) {
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
-                sendSignal({ type: 'OFFER', from: myId, to: remoteId, sdp: pc.localDescription });
-            }
-
-            return pc;
-        }
-
-        async function flushCandidates(remoteId, pc) {
-            const list = pendingCandidates[remoteId] || [];
-            delete pendingCandidates[remoteId];
-            for (const c of list) {
-                try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (e) {}
-            }
-        }
-
-        function removePeer(remoteId) {
-            if (pcs[remoteId]) {
-                try { pcs[remoteId].close(); } catch (e) {}
-                delete pcs[remoteId];
-            }
-            delete activeUsers[remoteId];
-            delete peerAudioReady[remoteId];
-            const audioEl = document.getElementById('audio_' + remoteId);
-            if (audioEl) audioEl.remove();
-
-            if (channelLockedBy === remoteId) {
-                channelLockedBy = null;
-                setFreeUI();
-            }
-            renderUsers();
         }
 
         const pttBtn = document.getElementById('ptt-btn');
@@ -591,13 +472,56 @@
             if (!myStream || isTalking) return;
 
             isTalking = true;
-            myStream.getAudioTracks()[0].enabled = true;
+            audioChunks = [];
             pttBtn.classList.add('talking');
             document.getElementById('ptt-label').innerText = "GAPIRMOQDASIZ...";
-            document.getElementById('channel-status').innerText = "Efirdasiz";
+            document.getElementById('channel-status').innerText = "Ovoz yozilmoqda...";
             playBeep(750, 0.08);
 
-            sendSignal({ type: 'PTT_START', from: myId, name: myName });
+            if (mqttClient && mqttClient.connected) {
+                mqttClient.publish(`${topicBase}/voice`, JSON.stringify({
+                    type: 'PTT_START', from: myId, name: myName
+                }), { qos: 0 });
+            }
+
+            try {
+                const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                    ? 'audio/webm;codecs=opus'
+                    : (MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : '');
+
+                mediaRecorder = mimeType
+                    ? new MediaRecorder(myStream, { mimeType, audioBitsPerSecond: 16000 })
+                    : new MediaRecorder(myStream, { audioBitsPerSecond: 16000 });
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data && event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+
+                mediaRecorder.onstop = () => {
+                    if (audioChunks.length === 0) return;
+                    const finalMime = mediaRecorder.mimeType || 'audio/webm';
+                    const blob = new Blob(audioChunks, { type: finalMime });
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        const base64Data = reader.result.split(',')[1];
+                        if (mqttClient && mqttClient.connected && base64Data) {
+                            mqttClient.publish(`${topicBase}/voice`, JSON.stringify({
+                                type: 'VOICE_BURST',
+                                from: myId,
+                                name: myName,
+                                mime: finalMime,
+                                audio: base64Data
+                            }), { qos: 1 });
+                        }
+                    };
+                    reader.readAsDataURL(blob);
+                };
+
+                mediaRecorder.start(250);
+            } catch (err) {}
+
             renderUsers();
         }
 
@@ -606,13 +530,27 @@
             if (!isTalking) return;
 
             isTalking = false;
-            myStream.getAudioTracks()[0].enabled = false;
             pttBtn.classList.remove('talking');
             document.getElementById('ptt-label').innerText = "BOSIB GAPIRING";
-            document.getElementById('channel-status').innerText = "Kanal bo'sh";
+            document.getElementById('channel-status').innerText = "Yuborildi ✓";
             playBeep(450, 0.08);
 
-            sendSignal({ type: 'PTT_STOP', from: myId });
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                try { mediaRecorder.stop(); } catch (err) {}
+            }
+
+            if (mqttClient && mqttClient.connected) {
+                mqttClient.publish(`${topicBase}/voice`, JSON.stringify({
+                    type: 'PTT_STOP', from: myId
+                }), { qos: 0 });
+            }
+
+            setTimeout(() => {
+                if (!isTalking && !isPlayingQueue) {
+                    document.getElementById('channel-status').innerText = "Kanal bo'sh";
+                }
+            }, 1500);
+
             renderUsers();
         }
 
@@ -645,15 +583,10 @@
 
             ids.forEach(id => {
                 const isSpeaker = (id === channelLockedBy) || (id === myId && isTalking);
-                let audioBadge = '';
-                if (id !== myId) {
-                    audioBadge = peerAudioReady[id]
-                        ? '<span class="user-audio-state ready">● Ovoz tayyor</span>'
-                        : '<span class="user-audio-state">○ Kutish rejimi</span>';
-                }
+                const badge = id !== myId ? '<span class="user-audio-state">● Guruhda</span>' : '';
                 const div = document.createElement('div');
                 div.className = 'user-item' + (isSpeaker ? ' speaking' : '');
-                div.innerHTML = `<span>👤 ${activeUsers[id]} ${audioBadge}</span><span class="speaking-tag">🔊 GAPIRMOQDA</span>`;
+                div.innerHTML = `<span>👤 ${activeUsers[id]} ${badge}</span><span class="speaking-tag">🔊 GAPIRMOQDA</span>`;
                 list.appendChild(div);
             });
         }
@@ -668,19 +601,17 @@
         function editSettings() {
             isExplicitlyLeaving = true;
             localStorage.removeItem(ACTIVE_SESSION_KEY);
-            sendSignal({ type: 'BYE', from: myId });
-            clearInterval(heartbeatTimer);
+            if (mqttClient && mqttClient.connected) {
+                // Server xotirasidan o'zimizni faqat shu tugma bosilganda o'chiramiz
+                mqttClient.publish(`${topicBase}/members/${myId}`, '', { qos: 1, retain: true });
+            }
             setTimeout(() => {
                 if (mqttClient) { try { mqttClient.end(true); } catch (e) {} mqttClient = null; }
-            }, 150);
-            Object.values(pcs).forEach(pc => { try { pc.close(); } catch (e) {} });
-            pcs = {};
+            }, 200);
             activeUsers = {};
-            peerAudioReady = {};
             channelLockedBy = null;
             isTalking = false;
             if (myStream) { myStream.getTracks().forEach(t => t.stop()); myStream = null; }
-            document.getElementById('audio-container').innerHTML = '';
 
             loadSavedProfile();
             document.getElementById('radio-screen').style.display = 'none';
@@ -690,8 +621,10 @@
         function leaveRadio() {
             isExplicitlyLeaving = true;
             localStorage.removeItem(ACTIVE_SESSION_KEY);
-            sendSignal({ type: 'BYE', from: myId });
-            setTimeout(() => location.reload(), 200);
+            if (mqttClient && mqttClient.connected) {
+                mqttClient.publish(`${topicBase}/members/${myId}`, '', { qos: 1, retain: true });
+            }
+            setTimeout(() => location.reload(), 250);
         }
     </script>
 </body>
