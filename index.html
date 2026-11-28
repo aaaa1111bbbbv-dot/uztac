@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Ratsiya Pro v5 - Background</title>
+    <title>Ratsiya Pro v6</title>
     <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
     <style>
         * { box-sizing: border-box; user-select: none; -webkit-user-select: none; font-family: 'Segoe UI', Roboto, sans-serif; }
@@ -36,6 +36,8 @@
         .users-box { background: #1a1a1a; border-radius: 12px; padding: 12px; margin: 10px 0; flex-grow: 1; overflow-y: auto; border: 1px solid #2c2c2c; }
         .users-title { font-size: 13px; color: #aaa; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
         .user-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #252525; border-radius: 8px; margin-bottom: 6px; font-size: 14px; }
+        .user-audio-state { font-size: 11px; color: #888; margin-left: 6px; }
+        .user-audio-state.ready { color: #00e676; }
         .speaking-tag { color: #00e676; font-weight: bold; font-size: 12px; display: none; }
         .user-item.speaking { border: 1px solid #00e676; background: #1b3326; }
         .user-item.speaking .speaking-tag { display: inline; }
@@ -74,7 +76,7 @@
 
     <div id="login-screen" class="center-screen">
         <div class="card">
-            <h2>📻 Ratsiya Pro <span style="font-size:12px;color:#00e676;">v5</span></h2>
+            <h2>📻 Ratsiya Pro <span style="font-size:12px;color:#00e676;">v6</span></h2>
             <div id="saved-indicator" class="saved-badge">✓ Saqlangan ma'lumotlar yuklandi</div>
             
             <label class="field-label" for="username">Ismingiz:</label>
@@ -131,7 +133,6 @@
         const PROFILE_ROOM_KEY = "ratsiya_saved_roomcode_v2";
         const CLIENT_ID_KEY = "ratsiya_persistent_client_id_v1";
 
-        // Qurilma uchun doimiy ID (qayta ulanganda dublikat bo'lmasligi uchun)
         let myId = localStorage.getItem(CLIENT_ID_KEY);
         if (!myId) {
             myId = 'u_' + Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
@@ -193,7 +194,7 @@
         });
 
         async function generateIsolatedChannelHash(groupName, password) {
-            const combined = `UZ_RATSIYA_V5::${groupName.toLowerCase()}::${password}`;
+            const combined = `UZ_RATSIYA_V6::${groupName.trim().toLowerCase()}::${password.trim()}`;
             if (window.crypto && window.crypto.subtle) {
                 const msgUint8 = new TextEncoder().encode(combined);
                 const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
@@ -210,18 +211,25 @@
             }
         }
 
-        const BROKERS = [
-            'wss://broker.hivemq.com:8884/mqtt',
-            'wss://broker.emqx.io:8084/mqtt',
-            'wss://test.mosquitto.org:8081/mqtt'
-        ];
-        let brokerIdx = 0;
+        // Barcha qurilmalar har doim aynan shu yagona barqaror brokerga ulanadi
+        const BROKER_URL = 'wss://broker.emqx.io:8084/mqtt';
 
+        // STUN + TURN serverlar (4G mobil tarmoqlar o'rtasida ham ovoz o'tishi uchun)
         const RTC_CONFIG = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun.cloudflare.com:3478' }
+                { urls: 'stun:stun.relay.metered.ca:80' },
+                {
+                    urls: 'turn:global.relay.metered.ca:80',
+                    username: 'e8dd65b92f6dde43146a9f70',
+                    credential: '22vD+R/0l3B+4k9F'
+                },
+                {
+                    urls: 'turn:global.relay.metered.ca:443?transport=tcp',
+                    username: 'e8dd65b92f6dde43146a9f70',
+                    credential: '22vD+R/0l3B+4k9F'
+                }
             ]
         };
 
@@ -231,13 +239,13 @@
         let displayGroupName = "";
         let topicBase = "";
         let pcs = {};
+        let peerAudioReady = {};
         let pendingCandidates = {};
         let activeUsers = {};
         let isTalking = false;
         let channelLockedBy = null;
         let wakeLock = null;
         let heartbeatTimer = null;
-        let connectWatchdog = null;
         let keepAliveAudioEl = null;
         let isExplicitlyLeaving = false;
 
@@ -257,16 +265,13 @@
             } catch (e) {}
         }
 
-        // Android tizimi ekran o'chganda ham ilovani uxlatmasligi uchun kuchaytirilgan fon ushlagich
         function enableStrongBackgroundMode() {
             try {
                 if (audioCtx.state === 'suspended') audioCtx.resume();
-
-                // 1. Web Audio orqali eshitilmaydigan doimiy oqim yaratish (Android media xizmatini uyg'oq tutadi)
                 const dest = audioCtx.createMediaStreamDestination();
                 const osc = audioCtx.createOscillator();
                 const gain = audioCtx.createGain();
-                osc.frequency.value = 10; // 10 Hz (inson qulog'i eshitmaydi)
+                osc.frequency.value = 10;
                 gain.gain.value = 0.0001;
                 osc.connect(gain);
                 gain.connect(dest);
@@ -281,7 +286,6 @@
                 }
                 keepAliveAudioEl.play().catch(() => {});
 
-                // 2. Shtorkada (Bildirishnomalar panelida) ratsiya boshqaruvi
                 if ('mediaSession' in navigator) {
                     navigator.mediaSession.metadata = new MediaMetadata({
                         title: '📻 Ratsiya: ' + displayGroupName,
@@ -291,27 +295,21 @@
                     navigator.mediaSession.playbackState = 'playing';
                 }
 
-                // 3. WakeLock
                 if ('wakeLock' in navigator) {
                     navigator.wakeLock.request('screen').then(lock => { wakeLock = lock; }).catch(() => {});
                 }
             } catch (e) {}
         }
 
-        // Ekran qaytib yoqilganda yoki ilovaga qaytilganda darhol aloqani tekshirish va uyg'otish
         document.addEventListener('visibilitychange', () => {
             if (document.getElementById('radio-screen').style.display === 'flex') {
                 if (audioCtx.state === 'suspended') audioCtx.resume();
-                if (keepAliveAudioEl && keepAliveAudioEl.paused) {
-                    keepAliveAudioEl.play().catch(() => {});
-                }
+                if (keepAliveAudioEl && keepAliveAudioEl.paused) keepAliveAudioEl.play().catch(() => {});
                 if (document.visibilityState === 'visible') {
                     if (!wakeLock && 'wakeLock' in navigator) {
                         navigator.wakeLock.request('screen').then(lock => { wakeLock = lock; }).catch(() => {});
                     }
-                    if (!mqttClient || !mqttClient.connected) {
-                        connectBroker();
-                    } else {
+                    if (mqttClient && mqttClient.connected) {
                         sendSignal({ type: 'HELLO', from: myId, name: myName });
                     }
                 }
@@ -335,7 +333,7 @@
             localStorage.setItem(PROFILE_ROOM_KEY, rawPass);
 
             const hash = await generateIsolatedChannelHash(rawGroup, rawPass);
-            topicBase = `uz_ratsiya_pro/room_${hash}`;
+            topicBase = `uz_ratsiya_pro_v6/room_${hash}`;
 
             try {
                 myStream = await navigator.mediaDevices.getUserMedia({
@@ -358,21 +356,18 @@
 
         function connectBroker() {
             if (isExplicitlyLeaving) return;
-            clearTimeout(connectWatchdog);
             if (mqttClient) {
                 try { mqttClient.end(true); } catch (e) {}
             }
 
-            const brokerUrl = BROKERS[brokerIdx % BROKERS.length];
             updateStatus(false, "Ulanmoqda...");
 
-            mqttClient = mqtt.connect(brokerUrl, {
-                clientId: 'uzr_' + myId + '_' + Date.now().toString(36),
-                keepalive: 60,
+            mqttClient = mqtt.connect(BROKER_URL, {
+                clientId: 'uzr6_' + myId + '_' + Math.random().toString(36).substring(2, 6),
+                keepalive: 45,
                 reconnectPeriod: 2000,
-                connectTimeout: 8000,
+                connectTimeout: 10000,
                 clean: true,
-                // Faqat foydalanuvchi ilovani butunlay yopsagina BYE yuborish
                 will: {
                     topic: `${topicBase}/signal`,
                     payload: JSON.stringify({ type: 'BYE', from: myId }),
@@ -381,27 +376,13 @@
                 }
             });
 
-            connectWatchdog = setTimeout(() => {
-                if (!mqttClient || !mqttClient.connected) {
-                    brokerIdx++;
-                    connectBroker();
-                }
-            }, 8500);
-
             mqttClient.on('connect', () => {
-                clearTimeout(connectWatchdog);
                 updateStatus(true, "Aloqada");
                 activeUsers[myId] = myName + " (Siz)";
                 renderUsers();
 
-                mqttClient.subscribe(`${topicBase}/signal`, { qos: 0 });
-                sendSignal({ type: 'HELLO', from: myId, name: myName });
-
-                // Mavjud ishtirokchilar bilan WebRTC ovoz kanalini qayta tekshirish
-                Object.keys(activeUsers).forEach(uid => {
-                    if (uid !== myId && (!pcs[uid] || pcs[uid].connectionState !== 'connected')) {
-                        createPeerConnection(uid, true);
-                    }
+                mqttClient.subscribe(`${topicBase}/signal`, { qos: 0 }, () => {
+                    sendSignal({ type: 'HELLO', from: myId, name: myName });
                 });
 
                 clearInterval(heartbeatTimer);
@@ -409,7 +390,7 @@
                     if (mqttClient && mqttClient.connected) {
                         sendSignal({ type: 'PING', from: myId, name: myName });
                     }
-                }, 10000);
+                }, 6000);
             });
 
             mqttClient.on('message', async (topic, payload) => {
@@ -418,24 +399,19 @@
                 if (!msg || msg.from === myId) return;
                 if (msg.to && msg.to !== myId) return;
 
-                if (msg.type === 'HELLO') {
+                if (msg.type === 'HELLO' || msg.type === 'WELCOME' || msg.type === 'PING') {
+                    const isNew = !activeUsers[msg.from];
                     activeUsers[msg.from] = msg.name;
-                    renderUsers();
-                    sendSignal({ type: 'WELCOME', from: myId, to: msg.from, name: myName });
-                    await createPeerConnection(msg.from, true);
-                } else if (msg.type === 'WELCOME') {
-                    activeUsers[msg.from] = msg.name;
-                    renderUsers();
-                    if (!pcs[msg.from] || pcs[msg.from].connectionState === 'failed' || pcs[msg.from].connectionState === 'closed') {
-                        await createPeerConnection(msg.from, false);
+                    if (isNew) renderUsers();
+
+                    if (msg.type === 'HELLO') {
+                        sendSignal({ type: 'WELCOME', from: myId, to: msg.from, name: myName });
                     }
-                } else if (msg.type === 'PING') {
-                    if (!activeUsers[msg.from]) {
-                        activeUsers[msg.from] = msg.name;
-                        renderUsers();
-                    }
-                    // Agar ovoz kanali uzilgan bo'lsa, avtomatik tiklash
-                    if ((!pcs[msg.from] || pcs[msg.from].connectionState === 'failed' || pcs[msg.from].connectionState === 'closed') && myId > msg.from) {
+
+                    // Faqat ID si katta bo'lgan qurilma ulanishni boshlaydi (to'qnashuv bo'lmasligi uchun)
+                    const pc = pcs[msg.from];
+                    const needCall = !pc || pc.connectionState === 'failed' || pc.connectionState === 'closed';
+                    if (needCall && myId > msg.from) {
                         await createPeerConnection(msg.from, true);
                     }
                 } else if (msg.type === 'OFFER') {
@@ -447,7 +423,7 @@
                     sendSignal({ type: 'ANSWER', from: myId, to: msg.from, sdp: pc.localDescription });
                 } else if (msg.type === 'ANSWER') {
                     const pc = pcs[msg.from];
-                    if (pc && pc.signalingState !== 'stable') {
+                    if (pc && pc.signalingState === 'have-local-offer') {
                         await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
                         await flushCandidates(msg.from, pc);
                     }
@@ -464,7 +440,6 @@
                     channelLockedBy = msg.from;
                     setBusyUI(msg.name);
                     playBeep(600, 0.08);
-                    // Ovoz elementini majburan uyg'otish (ekran o'chgan bo'lsa ham eshitilishi uchun)
                     const audioEl = document.getElementById('audio_' + msg.from);
                     if (audioEl) {
                         audioEl.muted = false;
@@ -478,20 +453,12 @@
                         playBeep(400, 0.08);
                     }
                 } else if (msg.type === 'BYE') {
-                    // Faqat foydalanuvchi o'zi "Chiqish" yoki "Tahrirlash" bosganda ro'yxatdan o'chiriladi
                     removePeer(msg.from);
                 }
             });
 
             mqttClient.on('offline', () => {
                 if (!isExplicitlyLeaving) updateStatus(false, "Qayta ulanmoqda...");
-            });
-
-            mqttClient.on('error', () => {
-                if (!isExplicitlyLeaving) {
-                    brokerIdx++;
-                    setTimeout(connectBroker, 2000);
-                }
             });
         }
 
@@ -508,6 +475,8 @@
 
             const pc = new RTCPeerConnection(RTC_CONFIG);
             pcs[remoteId] = pc;
+            peerAudioReady[remoteId] = false;
+            renderUsers();
 
             if (myStream) {
                 myStream.getTracks().forEach(track => pc.addTrack(track, myStream));
@@ -531,16 +500,22 @@
                 audioEl.srcObject = event.streams[0];
                 audioEl.volume = 1.0;
                 audioEl.play().catch(() => {});
+                peerAudioReady[remoteId] = true;
+                renderUsers();
             };
 
             pc.onconnectionstatechange = () => {
-                if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-                    // Ovoz kanali uzilsa, 2 soniyadan keyin avtomatik qayta ulash
+                if (pc.connectionState === 'connected') {
+                    peerAudioReady[remoteId] = true;
+                    renderUsers();
+                } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                    peerAudioReady[remoteId] = false;
+                    renderUsers();
                     setTimeout(() => {
                         if (!isExplicitlyLeaving && activeUsers[remoteId] && myId > remoteId) {
                             createPeerConnection(remoteId, true);
                         }
-                    }, 2000);
+                    }, 2500);
                 }
             };
 
@@ -567,6 +542,7 @@
                 delete pcs[remoteId];
             }
             delete activeUsers[remoteId];
+            delete peerAudioReady[remoteId];
             const audioEl = document.getElementById('audio_' + remoteId);
             if (audioEl) audioEl.remove();
 
@@ -639,9 +615,15 @@
 
             ids.forEach(id => {
                 const isSpeaker = (id === channelLockedBy) || (id === myId && isTalking);
+                let audioBadge = '';
+                if (id !== myId) {
+                    audioBadge = peerAudioReady[id]
+                        ? '<span class="user-audio-state ready">● Ovoz tayyor</span>'
+                        : '<span class="user-audio-state">○ Ulanmoqda...</span>';
+                }
                 const div = document.createElement('div');
                 div.className = 'user-item' + (isSpeaker ? ' speaking' : '');
-                div.innerHTML = `<span>👤 ${activeUsers[id]}</span><span class="speaking-tag">🔊 GAPIRMOQDA</span>`;
+                div.innerHTML = `<span>👤 ${activeUsers[id]} ${audioBadge}</span><span class="speaking-tag">🔊 GAPIRMOQDA</span>`;
                 list.appendChild(div);
             });
         }
@@ -655,7 +637,6 @@
 
         function editSettings() {
             isExplicitlyLeaving = true;
-            clearTimeout(connectWatchdog);
             sendSignal({ type: 'BYE', from: myId });
             clearInterval(heartbeatTimer);
             setTimeout(() => {
@@ -664,6 +645,7 @@
             Object.values(pcs).forEach(pc => { try { pc.close(); } catch (e) {} });
             pcs = {};
             activeUsers = {};
+            peerAudioReady = {};
             channelLockedBy = null;
             isTalking = false;
             if (myStream) { myStream.getTracks().forEach(t => t.stop()); myStream = null; }
@@ -676,7 +658,6 @@
 
         function leaveRadio() {
             isExplicitlyLeaving = true;
-            clearTimeout(connectWatchdog);
             sendSignal({ type: 'BYE', from: myId });
             setTimeout(() => location.reload(), 200);
         }
